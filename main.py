@@ -94,6 +94,7 @@ class SimpleMemory(Star):
         )
         self.spaces: SpaceManager | None = None
         self.embedder: Embedder | None = None
+        self.embedder_state: str = "STARTING"
         self._embedder_task: asyncio.Task | None = None
         self.watcher: FileWatcher | None = None
         self.inject_files = list(self.cfg.get("inject_files") or ["MEMORY.md"])
@@ -195,6 +196,7 @@ class SimpleMemory(Star):
 
     async def _deferred_embedder_load(self) -> None:
         """M6-9: 后台加载 embedding（原因见 initialize 注释），成功后做初始重建索引"""
+        self.embedder_state = "STARTING"
         logger.info("simple_memory 正在初始化 embedding（延迟加载）...")
         loaded = False
         for attempt in range(1, 7):
@@ -209,11 +211,13 @@ class SimpleMemory(Star):
                 if attempt < 6:
                     await asyncio.sleep(10)
         if not loaded:
+            self.embedder_state = "DEGRADED"
             logger.warning(
-                "simple_memory embedding 6 次重试失败，日记退化为纯文本，语义检索不可用"
+                "simple_memory embedding 6 次重试失败，语义检索不可用（状态: DEGRADED）"
             )
             self.embedder = None
             return
+        self.embedder_state = "READY"
         logger.info("simple_memory embedding 就绪（延迟加载）")
         try:
             await self._reindex_all(force=False)
@@ -236,6 +240,7 @@ class SimpleMemory(Star):
         if self.embedder:
             await self.embedder.unload()
             self.embedder = None
+        self.embedder_state = "FAILED"
         # spaces 只是路径计算器不占资源，重载窗口内退场实例的工具调用仍可安全使用
         logger.info("simple_memory 已停止")
 
@@ -325,10 +330,18 @@ class SimpleMemory(Star):
         if not chunks:
             return
         embs = await self.embedder.embed(chunks)
-        now = int(time.time())
         if not path.is_file():
             logger.info(f"simple_memory embedding 期间文件被删: {rel}")
             return
+        try:
+            recheck = mf.read(path)
+        except OSError:
+            logger.info(f"simple_memory embedding 后文件被删: {rel}")
+            return
+        if hashlib.sha256(recheck.encode("utf-8")).hexdigest() != hashlib.sha256(text.encode("utf-8")).hexdigest():
+            logger.info(f"simple_memory embedding 期间文件已变，丢弃本次索引: {rel}")
+            return
+        now = int(time.time())
         file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         vdb.upsert(
             ids=[vdb.chunk_id(rel, i) for i in range(len(chunks))],
@@ -785,11 +798,14 @@ class SimpleMemory(Star):
         return f"已删除小本子第 {int(num)} 条"
 
     @filter.llm_tool(name="memory_write")
-    async def memory_write(self, event: AstrMessageEvent, content: str) -> str:
+    async def memory_write(
+        self, event: AstrMessageEvent, content: str, confirm: bool = False
+    ) -> str:
         """整篇重写小本子（MEMORY.md），逃生门，慎用。
 
         Args:
             content(string): 新的全文
+            confirm(boolean): 设为 true 才真正写入；false 时返回大小对比
         """
         session_id = str(event.unified_msg_origin)
         if not self.spaces.is_active(session_id):
@@ -797,15 +813,19 @@ class SimpleMemory(Star):
         async with self._notebook_lock:
             p = self._notebook_path(event)
             old = p.read_text(encoding="utf-8", errors="ignore") if p.is_file() else ""
-            warning = ""
-            if old.strip() and len(content.strip()) < len(old.strip()) * 0.5:
-                logger.warning(
-                    f"simple_memory memory_write 新内容不足旧内容 50%：{len(content.strip())} < {len(old.strip())}"
+            old_size = len(old.strip())
+            new_size = len(content.strip())
+            if not confirm:
+                return (
+                    f"⚠️ 将重写小本子。当前 {old_size} 字 → 新 {new_size} 字。"
+                    f"确认无误后设 confirm=true 执行。"
                 )
-                warning = "注意：新内容不到旧内容一半，已备份 MEMORY.md.bak"
+            warning = ""
+            if old.strip() and new_size < old_size * 0.5:
+                warning = "（注意：新内容不到旧内容一半）"
             self._notebook_bak(p)
             p.write_text(content.strip() + "\n", encoding="utf-8")
-        return "已重写小本子。" + warning
+        return f"已重写小本子。{warning}"
 
     @filter.command_group("mem")
     def mem_group(self) -> None:
