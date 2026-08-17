@@ -169,12 +169,14 @@ class ContextDiffer:
                 raw = json.loads(raw)
             return normalize(raw, think_cap=self.think_cap)
         except Exception as e:
-            logger.warning(f"openclaw_memory 读取会话失败 {session_id[:16]}: {e}")
+            logger.warning(f"simple_memory 读取会话失败 {session_id[:16]}: {e}")
             return []
 
     async def process(self, session_id: str) -> None:
         msgs = await self._fetch_full(session_id)
         if not msgs:
+            from .main import _dbg
+            _dbg(f"_fetch_full empty session={session_id[:24]}")
             return
         entry = await self.store.get(session_id)
         snap = entry.get("snapshot") or {}
@@ -212,6 +214,15 @@ class ContextDiffer:
             if role == "assistant" and content.strip() == ACK_TEXT:
                 continue
             raw.append(m)
+        if summary is None and msgs:
+            first = msgs[0]
+            if first.get("role") == "user":
+                fc = first.get("content") or ""
+                if isinstance(fc, str) and fc.startswith(SUMMARY_PREFIX):
+                    cand = fc[len(SUMMARY_PREFIX):].strip()
+                    states = entry.get("summary_states") or []
+                    if not states or states[-1]["text"] != cand:
+                        summary = cand
 
         if raw:
             async with self.lock:
@@ -227,12 +238,12 @@ class ContextDiffer:
                     lines.append(FPS_PREFIX + " ".join(fp for fp, _ in pairs) + " -->")
                     self.daily_file_for(session_id).append_to(path, "\n".join(lines))
                     logger.info(
-                        f"openclaw_memory 原文落盘 {session_id[:16]}: "
+                        f"simple_memory 原文落盘 {session_id[:16]}: "
                         f"new={len(pairs)} dedup={skipped}"
                     )
                 elif skipped:
                     logger.info(
-                        f"openclaw_memory {session_id[:16]} "
+                        f"simple_memory {session_id[:16]} "
                         f"fp 全部命中去重 {skipped} 条，不落盘"
                     )
         if summary and (
@@ -247,7 +258,15 @@ class ContextDiffer:
                 summary_states=states,
                 last_compress_ts=int(time.time()),
             )
-            logger.info(f"openclaw_memory 捕获新摘要 {session_id[:16]}: {len(summary)} 字")
+            logger.info(f"simple_memory 捕获新摘要 {session_id[:16]}: {len(summary)} 字")
+            async with self.lock:
+                now = datetime.now()
+                tag = now.strftime("%H:%M")
+                sum_path = self.daily_file_for(session_id).summary_path_for(now)
+                self.daily_file_for(session_id).append_to(
+                    sum_path,
+                    f"## [压缩 {tag}]\n{summary}\n",
+                )
         await self.store.update(
             session_id,
             snapshot={"count": len(msgs), "last_fp": msgs[-1]["fp"]},

@@ -93,7 +93,7 @@ class SpaceManager:
         d = self.path(session_id) / "memory"
         if not d.is_dir():
             return []
-        return sorted(d.glob("*.md"))
+        return sorted(f for f in d.glob("*.md") if not f.name.endswith(".summary.md"))
 
     def diary_files(self, session_id: str) -> list[Path]:
         d = self.path(session_id) / "memory" / "diary"

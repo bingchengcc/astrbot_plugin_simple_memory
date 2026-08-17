@@ -38,6 +38,14 @@ class DailyFile:
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         return self.memory_dir / f"{day}.md"
 
+    def summary_path_for(self, now: datetime) -> Path:
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        return self.memory_dir / f"{cycle_file_date(now, self.digest_time)}.summary.md"
+
+    def summary_path_for_date(self, day: str) -> Path:
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        return self.memory_dir / f"{day}.summary.md"
+
     def append_to(self, path: Path, block: str) -> Path:
         with open(path, "a", encoding="utf-8") as f:
             f.write(block)

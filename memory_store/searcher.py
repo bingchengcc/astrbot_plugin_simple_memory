@@ -27,7 +27,7 @@ class Searcher:
         if not query.strip():
             return []
         q_emb = await self.embedder.embed([query])
-        where = {"source": source} if source in ("openclaw", "astrbot") else None
+        where = {"source": source} if source in ("simple_memory", "astrbot") else None
         raw = self.vdb.query(q_emb[0], n=top_k * 3, where=where)
 
         cutoff = self._parse_range(time_range)

@@ -50,7 +50,7 @@ def _scan_cmd_handlers() -> None:
         ):
             low = h.handler_name.lower()
             mod = (h.handler_module_path or "").lower()
-            if "mem" in low or "openclaw" in mod:
+            if "mem" in low or "simple_memory" in mod:
                 _dbg(
                     f"cmd handler: full={h.handler_full_name} "
                     f"module={h.handler_module_path} enabled={h.enabled}"
@@ -68,7 +68,7 @@ def _resolve_data_path(raw: str, fallback: str) -> Path:
 
 
 
-class OpenClawMemory(Star):
+class SimpleMemory(Star):
     def __init__(self, context: Context, config: dict | None = None):
         super().__init__(context, config)
         cfg = config or {}
@@ -81,7 +81,7 @@ class OpenClawMemory(Star):
             clamped = max(max_ctx - 32, 128)
             if chunk_size > clamped:
                 logger.warning(
-                    f"[OpenClawMemory] chunk_size {chunk_size} 超过 "
+                    f"[SimpleMemory] chunk_size {chunk_size} 超过 "
                     f"embed_max_ctx {max_ctx}，钳制为 {clamped}"
                 )
                 chunk_size = clamped
@@ -115,7 +115,7 @@ class OpenClawMemory(Star):
         _dbg(f"initialize() start enabled={self.enabled}")
         _scan_cmd_handlers()
         if not self.enabled:
-            logger.info("openclaw_memory 未启用")
+            logger.info("simple_memory 未启用")
             _dbg("initialize() early return: disabled")
             return
         self.workspace = _resolve_data_path(
@@ -132,6 +132,8 @@ class OpenClawMemory(Star):
         self._inited = True
 
         if self.digest_enabled:
+            self._inject_compress_instruction()
+
             self.differ = ContextDiffer(
                 store=SessionStore(StarTools.get_data_dir() / "session_store.json"),
                 daily_file_for=self.spaces.daily_file,
@@ -163,7 +165,7 @@ class OpenClawMemory(Star):
         provider_id = str(self.cfg.get("embedding_provider_id") or "")
         if not provider_id:
             logger.warning(
-                "openclaw_memory: 未配置 embedding_provider_id（需在 AstrBot WebUI 提供商管理中配置 Embedding 类型提供商）"
+                "simple_memory: 未配置 embedding_provider_id（需在 AstrBot WebUI 提供商管理中配置 Embedding 类型提供商）"
             )
             _dbg("initialize() early return: no embedding_provider_id")
             return
@@ -184,13 +186,13 @@ class OpenClawMemory(Star):
         self.watcher.start()
 
         logger.info(
-            f"openclaw_memory 启动完成，会话空间 {len(self.spaces.existing_dirs())} 个"
+            f"simple_memory 启动完成，会话空间 {len(self.spaces.existing_dirs())} 个"
         )
         _dbg(f"initialize() done workspace={self.workspace}")
 
     async def _deferred_embedder_load(self) -> None:
         """M6-9: 后台加载 embedding（原因见 initialize 注释），成功后做初始重建索引"""
-        logger.info("openclaw_memory 正在初始化 embedding（延迟加载）...")
+        logger.info("simple_memory 正在初始化 embedding（延迟加载）...")
         loaded = False
         for attempt in range(1, 7):
             try:
@@ -199,21 +201,21 @@ class OpenClawMemory(Star):
                 break
             except Exception as e:
                 logger.warning(
-                    f"openclaw_memory embedding 初始化失败（第 {attempt}/6 次）: {e}"
+                    f"simple_memory embedding 初始化失败（第 {attempt}/6 次）: {e}"
                 )
                 if attempt < 6:
                     await asyncio.sleep(10)
         if not loaded:
             logger.warning(
-                "openclaw_memory embedding 6 次重试失败，日记退化为纯文本，语义检索不可用"
+                "simple_memory embedding 6 次重试失败，日记退化为纯文本，语义检索不可用"
             )
             self.embedder = None
             return
-        logger.info("openclaw_memory embedding 就绪（延迟加载）")
+        logger.info("simple_memory embedding 就绪（延迟加载）")
         try:
             await self._reindex_all(force=False)
         except Exception as e:
-            logger.warning(f"openclaw_memory 初始重建索引失败: {e}")
+            logger.warning(f"simple_memory 初始重建索引失败: {e}")
 
     async def terminate(self) -> None:
         _dbg("terminate() called")
@@ -232,12 +234,12 @@ class OpenClawMemory(Star):
             await self.embedder.unload()
             self.embedder = None
         # spaces 只是路径计算器不占资源，重载窗口内退场实例的工具调用仍可安全使用
-        logger.info("openclaw_memory 已停止")
+        logger.info("simple_memory 已停止")
 
     @staticmethod
     def info() -> dict[str, Any]:
         return {
-            "name": "astrbot_plugin_openclaw_memory",
+            "name": "astrbot_plugin_simple_memory",
             "author": "tuan",
             "description": "三层记忆：向量检索 + system prompt 注入 + 每日日记 + 共同小本子",
             "version": "0.1.0",
@@ -260,7 +262,7 @@ class OpenClawMemory(Star):
             for stale in vdb.list_files() - disk:
                 vdb.delete_file(stale)
                 logger.info(
-                    f"openclaw_memory 清理残留索引: {self._state_key(dir_name, stale)}"
+                    f"simple_memory 清理残留索引: {self._state_key(dir_name, stale)}"
                 )
             reindexed = 0
             unchanged = 0
@@ -276,16 +278,16 @@ class OpenClawMemory(Star):
                     reindexed += 1
                 except Exception:
                     logger.exception(
-                        f"openclaw_memory 索引文件失败（跳过，其余继续）: {key}"
+                        f"simple_memory 索引文件失败（跳过，其余继续）: {key}"
                     )
             total_re += reindexed
             total_unch += unchanged
             logger.info(
-                f"openclaw_memory 索引完成 {dir_name[:24]}：重建 {reindexed} 个文件，"
+                f"simple_memory 索引完成 {dir_name[:24]}：重建 {reindexed} 个文件，"
                 f"未变更跳过 {unchanged} 个"
             )
         logger.info(
-            f"openclaw_memory 全空间索引完成：重建 {total_re} 个文件，"
+            f"simple_memory 全空间索引完成：重建 {total_re} 个文件，"
             f"未变更跳过 {total_unch} 个"
         )
 
@@ -311,7 +313,7 @@ class OpenClawMemory(Star):
             text = mf.read(path)
         except OSError:
             vdb.delete_file(rel)
-            logger.info(f"openclaw_memory 索引时文件已消失: {rel}")
+            logger.info(f"simple_memory 索引时文件已消失: {rel}")
             return
         vdb.delete_file(rel)
         if not text.strip():
@@ -322,7 +324,7 @@ class OpenClawMemory(Star):
         embs = await self.embedder.embed(chunks)
         now = int(time.time())
         if not path.is_file():
-            logger.info(f"openclaw_memory embedding 期间文件被删: {rel}")
+            logger.info(f"simple_memory embedding 期间文件被删: {rel}")
             return
         file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         vdb.upsert(
@@ -332,7 +334,7 @@ class OpenClawMemory(Star):
             metas=[
                 {
                     "file": rel,
-                    "source": "openclaw",
+                    "source": "simple_memory",
                     "timestamp": now,
                     "file_hash": file_hash,
                 }
@@ -340,7 +342,7 @@ class OpenClawMemory(Star):
             ],
         )
         logger.info(
-            f"openclaw_memory 已索引 {self._state_key(dir_name, rel)}，{len(chunks)} 块"
+            f"simple_memory 已索引 {self._state_key(dir_name, rel)}，{len(chunks)} 块"
         )
 
     def _pointer_block(self, session_id: str) -> str:
@@ -388,13 +390,35 @@ class OpenClawMemory(Star):
                 if content:
                     parts.append(f"## {name}\n{content}")
         return "\n\n".join(parts)
+    def _inject_compress_instruction(self) -> None:
+        """启动时检测压缩提示词，若无结构标记则内存中追加。"""
+        try:
+            conf = self.context.get_config()
+            settings = conf.setdefault("provider_settings", {})
+            instr = settings.get("llm_compress_instruction") or ""
+            if "[经验 START]" in instr:
+                _dbg("compress instruction 已有标记，跳过注入")
+                return
+            addition = (
+                "\n\n摘要末尾追加经验段（固定格式）：\n"
+                "[经验 START]\n"
+                "- （关键决定/结论/踩坑/偏好，每条一行；无则写\"无\"）\n"
+                "[经验 END]"
+            )
+            settings["llm_compress_instruction"] = instr + addition
+            logger.info("simple_memory 已注入压缩摘要结构标记")
+            _dbg("compress instruction 注入完成")
+        except Exception as e:
+            logger.warning(f"simple_memory 压缩提示词注入失败（不影响主功能）: {e}")
+            _dbg(f"compress instruction 注入异常: {e}")
+
     def _load_index_state(self) -> dict:
         p = StarTools.get_data_dir() / "index_state.json"
         try:
             if p.is_file():
                 return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
-            logger.exception("openclaw_memory 读取 index_state 失败")
+            logger.exception("simple_memory 读取 index_state 失败")
         return {}
 
     def _save_index_state(self) -> None:
@@ -405,7 +429,7 @@ class OpenClawMemory(Star):
                 encoding="utf-8",
             )
         except Exception:
-            logger.exception("openclaw_memory 写入 index_state 失败")
+            logger.exception("simple_memory 写入 index_state 失败")
 
     def _should_reindex_file(self, path: Path, rel: str) -> bool:
         st = self._index_state.get(rel)
@@ -427,7 +451,7 @@ class OpenClawMemory(Star):
         threshold = int(self.cfg.get("reindex_min_delta_tokens") or 2000)
         if tokens < threshold:
             logger.info(
-                f"openclaw_memory watcher 跳过重建: {rel} 增量 {tokens} token < {threshold}"
+                f"simple_memory watcher 跳过重建: {rel} 增量 {tokens} token < {threshold}"
             )
             return False
         return True
@@ -441,7 +465,7 @@ class OpenClawMemory(Star):
             }
             self._save_index_state()
         except Exception:
-            logger.exception("openclaw_memory 记录索引状态失败")
+            logger.exception("simple_memory 记录索引状态失败")
 
     def _space_dir_of(self, path: Path) -> str | None:
         try:
@@ -483,7 +507,7 @@ class OpenClawMemory(Star):
             return
         await self._index_file(path, dir_name)
         self._record_indexed(key, path)
-        logger.info(f"openclaw_memory 增量重建索引: {key}")
+        logger.info(f"simple_memory 增量重建索引: {key}")
 
     async def _on_md_deleted(self, path: Path) -> None:
         if not self.embedder:
@@ -506,7 +530,7 @@ class OpenClawMemory(Star):
                 await self._index_file_locked(path, dir_name)
             else:
                 logger.info(
-                    f"openclaw_memory 已移除索引: {self._state_key(dir_name, rel)}"
+                    f"simple_memory 已移除索引: {self._state_key(dir_name, rel)}"
                 )
 
     @filter.on_llm_request()
@@ -528,9 +552,11 @@ class OpenClawMemory(Star):
     @filter.after_message_sent()
     async def _capture(self, event: AstrMessageEvent) -> None:
         if not self.enabled or not self.differ:
+            _dbg("_capture early: enabled/differ missing")
             return
         try:
             session_id = str(event.unified_msg_origin)
+            _dbg(f"_capture fired session={session_id[:30]}")
             if not self.spaces.is_active(session_id):
                 _dbg(f"_capture 跳过非活跃会话 {session_id[:24]}")
                 return
@@ -539,7 +565,7 @@ class OpenClawMemory(Star):
             import traceback
 
             _dbg("_capture 异常: " + traceback.format_exc(limit=3))
-            logger.exception("openclaw_memory 上下文捕获失败")
+            logger.exception("simple_memory 上下文捕获失败")
 
     @filter.llm_tool(name="memory_search")
     async def memory_search(
@@ -568,7 +594,7 @@ class OpenClawMemory(Star):
         if not self.spaces.is_active(session_id):
             return "本会话未启用记忆（不在白名单）"
         src = (source or "all").strip().lower()
-        if src in ("openclaw", "astrbot"):
+        if src in ("simple_memory", "astrbot"):
             src = "all"
         if src not in ("all", "diary", "raw"):
             src = "all"
@@ -605,6 +631,29 @@ class OpenClawMemory(Star):
         nb = self.spaces.notebook_path(session_id)
         if nb.is_file():
             cands.append(nb)
+        # 7.3D: summary.md 优先（结构化经验，密度高）
+        summaries = sorted(
+            [
+                f
+                for f in self.spaces.memory_dir(session_id).glob("*.summary.md")
+                if f.is_file()
+            ],
+            key=lambda p: p.stem.replace(".summary", ""),
+            reverse=True,
+        )
+        if cutoff:
+            kept_sum = []
+            for f in summaries:
+                stem = f.stem.replace(".summary", "")
+                dm2 = re.fullmatch(r"(\d{4}-\d{2}-\d{2})", stem)
+                if dm2:
+                    y2, mo2, d2 = (int(x) for x in dm2.group(1).split("-"))
+                    if date(y2, mo2, d2) >= cutoff:
+                        kept_sum.append(f)
+                else:
+                    kept_sum.append(f)
+            summaries = kept_sum
+        cands.extend(summaries[:10])
         raws = sorted(self.spaces.raw_files(session_id), reverse=True)
         if cutoff:
             kept = []
@@ -652,7 +701,7 @@ class OpenClawMemory(Star):
             if path.is_file():
                 shutil.copy2(path, path.parent / (path.name + ".bak"))
         except Exception:
-            logger.exception("openclaw_memory 小本子备份失败")
+            logger.exception("simple_memory 小本子备份失败")
 
     @filter.llm_tool(name="memory_read")
     async def memory_read(self, event: AstrMessageEvent) -> str:
@@ -748,7 +797,7 @@ class OpenClawMemory(Star):
             warning = ""
             if old.strip() and len(content.strip()) < len(old.strip()) * 0.5:
                 logger.warning(
-                    f"openclaw_memory memory_write 新内容不足旧内容 50%：{len(content.strip())} < {len(old.strip())}"
+                    f"simple_memory memory_write 新内容不足旧内容 50%：{len(content.strip())} < {len(old.strip())}"
                 )
                 warning = "注意：新内容不到旧内容一半，已备份 MEMORY.md.bak"
             self._notebook_bak(p)
@@ -757,7 +806,7 @@ class OpenClawMemory(Star):
 
     @filter.command_group("mem")
     def mem_group(self) -> None:
-        """OpenClaw 记忆管理指令组 /mem"""
+        """simple_memory 记忆管理指令组 /mem"""
         pass
 
     @mem_group.command("status", priority=10)

@@ -74,7 +74,7 @@ class FileWatcher:
         try:
             await cb(path)
         except Exception:
-            logger.exception(f"openclaw_memory watcher 处理失败: {path}")
+            logger.exception(f"simple_memory watcher 处理失败: {path}")
 
     async def stop(self) -> None:
         if self._observer:

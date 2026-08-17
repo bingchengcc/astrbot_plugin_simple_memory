@@ -16,14 +16,15 @@ from .daily_hook import (
 from .daily_md import DEFAULT_DIGEST_TIME, cycle_file_date, parse_digest_time
 
 TAIL_RAW_CAP = 4000
-CATCHUP_MAX_HOURS = 12
+CATCHUP_RAW_CAP = 8000
+SUMMARY_INPUT_CAP = 20000
 
 
 def _dbg(msg: str) -> None:
     try:
         from astrbot.api.star import StarTools
         with open(
-            StarTools.get_data_dir("astrbot_plugin_openclaw_memory") / "debug.log", "a", encoding="utf-8"
+            StarTools.get_data_dir("astrbot_plugin_simple_memory") / "debug.log", "a", encoding="utf-8"
         ) as f:
             f.write(
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [worker] {msg}"
@@ -130,10 +131,10 @@ class DigestWorker:
         _dbg(f"start() called digest_time={self.digest_time}")
         if self._task is None:
             self._task = asyncio.create_task(
-                self._loop(), name="openclaw_memory_digest"
+                self._loop(), name="simple_memory_digest"
             )
             logger.info(
-                f"openclaw_memory digest worker 启动（每日 {self.digest_time}）"
+                f"simple_memory digest worker 启动（每日 {self.digest_time}）"
             )
 
     async def stop(self) -> None:
@@ -148,7 +149,7 @@ class DigestWorker:
                 await t
             except BaseException:
                 pass
-        logger.info("openclaw_memory digest worker 停止")
+        logger.info("simple_memory digest worker 停止")
 
     async def _loop(self) -> None:
         _dbg("_loop 任务开始运行")
@@ -156,46 +157,13 @@ class DigestWorker:
         while True:
             if first:
                 first = False
-                now = datetime.now()
-                target = most_recent_past_target(self.digest_time, now)
-                gap_h = (now - target).total_seconds() / 3600
-                _dbg(
-                    f"首迭代 target={target:%m-%d %H:%M} gap={gap_h:.2f}h"
-                )
-                if 0 < gap_h <= CATCHUP_MAX_HOURS:
-                    _dbg("进入补跑闸门")
-                    try:
-                        sessions = await self.store.keys()
-                        if self.session_whitelist:
-                            sessions = [
-                                s
-                                for s in sessions
-                                if any(f in s for f in self.session_whitelist)
-                            ]
-                        wms = [
-                            int((await self.store.get(s)).get("watermark_ts") or 0)
-                            for s in sessions
-                        ]
-                        max_wm = max(wms, default=0)
-                        _dbg(f"闸门判定 max_wm={max_wm} target_ts={int(target.timestamp())}")
-                        if max_wm < int(target.timestamp()):
-                            logger.info(
-                                f"openclaw_memory 启动补跑：{target:%m-%d %H:%M} 目标已过 "
-                                f"{gap_h:.1f}h，立即结算 {target.date().isoformat()}.md"
-                            )
-                            _dbg("启动补跑触发")
-                            try:
-                                await self.digest(now=target)
-                            except asyncio.CancelledError:
-                                raise
-                            except Exception:
-                                logger.exception("openclaw_memory 启动补跑失败")
-                                _dbg("启动补跑失败")
-                        else:
-                            _dbg("闸门未过，无需补跑")
-                    except Exception as e:
-                        _dbg(f"首迭代闸门异常: {e!r}")
-                        logger.exception("openclaw_memory 首迭代补跑检查异常，继续运行")
+                try:
+                    await self._startup_catchup()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("simple_memory 启动补跑检查异常，继续运行")
+                    _dbg("启动补跑检查异常")
             delay = seconds_until_next(self.digest_time, datetime.now())
             await asyncio.sleep(delay)
             try:
@@ -203,7 +171,75 @@ class DigestWorker:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("openclaw_memory digest 运行失败")
+                logger.exception("simple_memory digest 运行失败")
+
+    async def _startup_catchup(self) -> None:
+        """启动检测：文件名日期早于今天的 raw md 有实际内容且无对应 diary → 补写日记。"""
+        today = datetime.now().date().isoformat()
+        sessions = await self.store.keys()
+        if self.session_whitelist:
+            sessions = [
+                s for s in sessions
+                if any(f in s for f in self.session_whitelist)
+            ]
+        _dbg(f"启动检测 sessions={len(sessions)} today={today}")
+        for sid in sessions:
+            daily = self.daily_file_for(sid)
+            mem_dir = daily.memory_dir
+            if not mem_dir.is_dir():
+                continue
+            for f in sorted(mem_dir.iterdir()):
+                m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.md", f.name)
+                if not m or m.group(1) >= today:
+                    continue
+                if f.stat().st_size == 0:
+                    continue
+                day_str = m.group(1)
+                diary_path = self.diary_file_for(sid).path_for_date(day_str)
+                if diary_path.is_file() and diary_path.stat().st_size > 0:
+                    continue
+                raw_text = f.read_text(encoding="utf-8", errors="ignore").strip()
+                if not raw_text:
+                    continue
+                logger.info(
+                    f"simple_memory 启动补跑：{sid[:16]} {day_str} 有raw无diary"
+                )
+                _dbg(f"启动补跑 {sid[:24]} {day_str} raw={len(raw_text)}字")
+                system = await self._diary_system(datetime.fromisoformat(day_str))
+                sum_path = daily.summary_path_for_date(day_str)
+                sum_text = ""
+                if sum_path.is_file():
+                    try:
+                        sum_text = sum_path.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+                if sum_text:
+                    prompt = (
+                        f"[{day_str} 压缩摘要]\n{sum_text[:SUMMARY_INPUT_CAP]}\n\n"
+                        f"[{day_str} 原文记录]\n{raw_text[:CATCHUP_RAW_CAP]}"
+                    )
+                else:
+                    prompt = (
+                        f"以下是 {day_str} 当天的对话原文记录，请据此写日记：" + "\n\n"
+                        + raw_text[:CATCHUP_RAW_CAP]
+                    )
+                _t0 = time.time()
+                diary_text = await self._llm(system, prompt)
+                _dl = len(diary_text or "")
+                _dbg(f"补跑 llm 完成 {sid[:24]} {day_str} {_dl}字 {time.time()-_t0:.0f}s")
+                if diary_text:
+                    async with self.lock:
+                        self.diary_file_for(sid).append_to(
+                            diary_path,
+                            f"## [diary] {sid[:24]} [补跑]\n" + diary_text + "\n",
+                        )
+                    logger.info(
+                        f"simple_memory {sid[:16]} {day_str} 补跑日记 {_dl} 字"
+                    )
+                else:
+                    logger.warning(
+                        f"simple_memory {sid[:16]} {day_str} 补跑日记为空，跳过"
+                    )
 
     async def digest(self, now: datetime | None = None) -> None:
         """执行一次总结。now 默认当前时刻（测试可注入）。
@@ -222,7 +258,7 @@ class DigestWorker:
                 s for s in sessions if any(f in s for f in self.session_whitelist)
             ]
         logger.info(
-            f"openclaw_memory digest 开始：{len(sessions)} 个会话，目标文件 {day}.md"
+            f"simple_memory digest 开始：{len(sessions)} 个会话，目标文件 {day}.md"
         )
         _dbg(f"digest 开始 {len(sessions)} 会话 day={day}")
 
@@ -232,12 +268,12 @@ class DigestWorker:
             try:
                 await self._digest_session(sid, now, raw_target, target)
             except Exception:
-                logger.exception(f"openclaw_memory digest 处理 {sid[:16]} 失败")
+                logger.exception(f"simple_memory digest 处理 {sid[:16]} 失败")
         try:
             await self._expire_raw(now)
         except Exception:
-            logger.exception("openclaw_memory 原文过期清理失败")
-        logger.info("openclaw_memory digest 完成")
+            logger.exception("simple_memory 原文过期清理失败")
+        logger.info("simple_memory digest 完成")
 
     async def _digest_session(
         self, sid: str, now: datetime, raw_target, target
@@ -249,7 +285,7 @@ class DigestWorker:
             window_h = (now.timestamp() - wm) / 3600
             if window_h > 36:
                 logger.warning(
-                    f"openclaw_memory {sid[:16]} digest 窗口 {window_h:.1f}h"
+                    f"simple_memory {sid[:16]} digest 窗口 {window_h:.1f}h"
                     "（>36h，疑似停机后补跑）"
                 )
 
@@ -271,7 +307,7 @@ class DigestWorker:
             block += FPS_PREFIX + " ".join(m["fp"] for m in tail) + " -->\n"
             async with self.lock:
                 self.daily_file_for(sid).append_to(raw_target, block)
-            logger.info(f"openclaw_memory {sid[:16]} 补尾 {len(tail)} 条")
+            logger.info(f"simple_memory {sid[:16]} 补尾 {len(tail)} 条")
 
         states = entry.get("summary_states") or []
         if not states and summary:
@@ -283,11 +319,28 @@ class DigestWorker:
             ]
 
         if states:
+            day_str = now.date().isoformat()
+            sum_path = self.daily_file_for(sid).summary_path_for(now)
+            summary_text = ""
+            if sum_path.is_file():
+                try:
+                    summary_text = sum_path.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+
             tail_text = "\n".join(tail_lines)
-            input_parts = [
-                "[摘要检查点（滚动摘要在不同时刻的快照，按时间顺序）]\n"
-                + self._render_states(states)
-            ]
+
+            if summary_text:
+                input_parts = [
+                    f"[全天压缩摘要（{day_str}）]\n"
+                    f"{summary_text[:SUMMARY_INPUT_CAP]}"
+                ]
+            else:
+                input_parts = [
+                    "[摘要检查点（滚动摘要快照，按时间顺序）]\n"
+                    + self._render_states(states)
+                ]
+
             if tail_text:
                 if count_tokens(tail_text) > self.tail_summary_threshold:
                     tail_sum = await self._llm(
@@ -302,10 +355,15 @@ class DigestWorker:
                         )
                 else:
                     input_parts.append(f"[今日尾部原文]\n{tail_text[:TAIL_RAW_CAP]}")
+
+            prev_diaries = self._previous_diaries(sid, day_str, days=2)
+            if prev_diaries:
+                input_parts.append(f"[近期日记（供参考连续性）]\n{prev_diaries}")
+
             _t0 = time.time()
             _dbg(
-                f"llm 开始 {sid[:24]} states={len(states)} "
-                f"input={len(chr(10).join(input_parts))} 字"
+                f"llm 开始 {sid[:24]} summary_file={'yes' if summary_text else 'no'} "
+                f"states={len(states)} input={len(chr(10).join(input_parts))} 字"
             )
             diary = await self._llm(
                 await self._diary_system(now), "\n\n".join(input_parts)
@@ -316,14 +374,16 @@ class DigestWorker:
             if diary:
                 body = diary
                 logger.info(
-                    f"openclaw_memory {sid[:16]} 日记生成 {len(diary)} 字"
+                    f"simple_memory {sid[:16]} 日记生成 {len(diary)} 字"
                 )
             else:
-                body = (
-                    "[日记生成失败/空返回，以最新摘要充当当天记录]\n"
-                    + states[-1]["text"]
+                fallback = summary_text if summary_text else (
+                    states[-1]["text"] if states else ""
                 )
-                logger.warning(f"openclaw_memory {sid[:16]} 日记为空，摘要直接落盘")
+                body = (
+                    f"[日记生成失败/空返回，以摘要充当 {day_str} 记录]\n{fallback}"
+                )
+                logger.warning(f"simple_memory {sid[:16]} 日记为空，摘要直接落盘")
             async with self.lock:
                 self.diary_file_for(sid).append_to(
                     target, f"## [diary] {sid[:24]}\n{body}\n"
@@ -354,7 +414,7 @@ class DigestWorker:
                 raw = json.loads(raw)
             return normalize(raw, think_cap=self.think_cap)
         except Exception as e:
-            logger.warning(f"openclaw_memory 读取会话失败 {sid[:16]}: {e}")
+            logger.warning(f"simple_memory 读取会话失败 {sid[:16]}: {e}")
             return []
 
     async def _fetch_tail(
@@ -369,6 +429,26 @@ class DigestWorker:
         if len(full) <= n:
             return [], []
         return full[n:], full
+
+    def _previous_diaries(self, sid: str, current_day: str, days: int = 2) -> str:
+        """读取前 N 天的日记文件内容，供日记生成时参考连续性。"""
+        from datetime import date, timedelta
+        try:
+            base = date.fromisoformat(current_day)
+        except ValueError:
+            return ""
+        parts = []
+        for i in range(1, days + 1):
+            d = (base - timedelta(days=i)).isoformat()
+            p = self.diary_file_for(sid).path_for_date(d)
+            if p.is_file():
+                try:
+                    text = p.read_text(encoding="utf-8").strip()
+                    if text:
+                        parts.append("### " + d + "\n" + text[:2000])
+                except Exception:
+                    pass
+        return "\n".join(parts) if parts else ""
 
     def _render_states(self, states: list[dict]) -> str:
         """检查点拼文：超 state_budget 时保首条 + 自最新往前取。"""
@@ -409,7 +489,7 @@ class DigestWorker:
                 provider_id = ""
         if not provider_id:
             logger.warning(
-                "openclaw_memory 日记 LLM 提供商未解析"
+                "simple_memory 日记 LLM 提供商未解析"
                 "（配置 diary_provider_id 或 AstrBot 主 LLM）"
             )
             return ""
@@ -420,7 +500,7 @@ class DigestWorker:
                 prompt=prompt,
             )
         except Exception as e:
-            logger.warning(f"openclaw_memory 日记 LLM 调用失败: {e}")
+            logger.warning(f"simple_memory 日记 LLM 调用失败: {e}")
             return ""
         return (getattr(resp, "completion_text", "") or "").strip()
 
@@ -449,7 +529,7 @@ class DigestWorker:
                 if p is not None:
                     card = (p.system_prompt or "").strip()
             except Exception as e:
-                logger.warning(f"openclaw_memory 人设卡获取失败: {e}")
+                logger.warning(f"simple_memory 人设卡获取失败: {e}")
         self._persona_card = card
         return card
 
@@ -480,10 +560,10 @@ class DigestWorker:
                 if i is None:
                     f.unlink()
                     logger.info(
-                        f"openclaw_memory 原文过期无日记，删除 {sid[:16]}/{f.name}"
+                        f"simple_memory 原文过期无日记，删除 {sid[:16]}/{f.name}"
                     )
                 else:
                     f.write_text("".join(lines[i:]), encoding="utf-8")
                     logger.info(
-                        f"openclaw_memory 原文过期留日记 {sid[:16]}/{f.name}（删原文 {i} 行）"
+                        f"simple_memory 原文过期留日记 {sid[:16]}/{f.name}（删原文 {i} 行）"
                     )
