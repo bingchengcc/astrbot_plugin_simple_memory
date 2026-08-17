@@ -15,10 +15,21 @@ AstrBot 三层记忆插件。为每个会话维护独立的小本子（长期记
 
 ## 安装
 
-1. 将本插件目录放入 AstrBot 的 `data/plugins/` 下
-2. 在 AstrBot WebUI 提供商管理中配置一个 **Embedding 类型**提供商（用于向量检索）
-3. 配置插件参数（见下表）
-4. **完整重启 AstrBot**（安装/更新后 API 重载不够，需进程级重启）
+**WebUI**：插件市场 → 手动安装，填仓库地址。
+
+**命令行**（在 AstrBot 根目录执行）：
+
+```bash
+.venv\Scripts\activate
+pip install chromadb
+git clone git@github.com:bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
+```
+
+重启 AstrBot。
+
+**注意**：安装/更新后需完整重启 AstrBot（API 重载可能导致事件钩子绑定到旧实例）。
+
+**前置**：在 AstrBot WebUI 提供商管理中配置一个 **Embedding 类型**提供商（用于向量检索）。
 
 ## 配置
 
