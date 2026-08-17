@@ -57,9 +57,9 @@ def _norm_content(content: Any, think_cap: int = THINK_CAP) -> str:
         return str(content)
 
 
-def _fp(role: str, content: str, tool_calls: Any) -> str:
+def _fp(role: str, content: str, tool_calls: Any, index: int = 0) -> str:
     raw = (
-        f"{role}\u0001{content}\u0001"
+        f"{index}\u0001{role}\u0001{content}\u0001"
         f"{json.dumps(tool_calls or [], ensure_ascii=False, sort_keys=True)}"
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
@@ -86,7 +86,7 @@ def normalize(
     contexts: list[dict], think_cap: int = THINK_CAP
 ) -> list[dict]:
     out = []
-    for m in contexts or []:
+    for idx, m in enumerate(contexts or []):
         role = str(m.get("role") or "")
         content = _norm_content(m.get("content"), think_cap)
         tool_calls = m.get("tool_calls")
@@ -96,7 +96,7 @@ def normalize(
                 "content": content,
                 "name": m.get("name"),
                 "tool_calls": tool_calls,
-                "fp": _fp(role, content, tool_calls),
+                "fp": _fp(role, content, tool_calls, idx),
             }
         )
     return out

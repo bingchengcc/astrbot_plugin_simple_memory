@@ -30,7 +30,10 @@ INJECT_MARKER = "\n# Memory Context\n\n"
 def _dbg(msg: str) -> None:
     try:
         with open(
-            StarTools.get_data_dir() / "debug.log", "a", encoding="utf-8"
+            StarTools.get_data_dir("astrbot_plugin_simple_memory")
+            / "debug.log",
+            "a",
+            encoding="utf-8",
         ) as f:
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}" + chr(10))
     except Exception:
