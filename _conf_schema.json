@@ -1,0 +1,138 @@
+{
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用",
+    "hint": "关闭后插件完全静默，不注册命令和工具。"
+  },
+  "workspace_path": {
+    "type": "string",
+    "default": "memory",
+    "description": "记忆文件根目录",
+    "hint": "每个会话在这里各建一个独立文件夹（文件夹名=会话统一 ID，冒号换下划线），里面是小本子 MEMORY.md、日记 memory/、向量库 chroma/，互不干扰。memory 根下也可以放共享 .md（如 SOUL.md，列入 inject_files 即注入所有会话）。相对路径基于插件 data 目录解析，留空等同 memory。"
+  },
+  "embedding_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "Embedding 提供商 ID",
+    "hint": "AstrBot WebUI 提供商管理中 Embedding 类型提供商的 ID，必填；未配置时插件不启动检索。"
+  },
+  "chunk_size": {
+    "type": "int",
+    "default": 384,
+    "description": "切块目标大小 (token)",
+    "hint": "每个文本块的目标 token 数。"
+  },
+  "chunk_overlap": {
+    "type": "int",
+    "default": 64,
+    "description": "相邻块重叠 (token)",
+    "hint": "相邻切块之间的重叠 token 数，避免语义在块边界被切断。"
+  },
+  "embed_max_ctx": {
+    "type": "int",
+    "default": 0,
+    "description": "Embedding 模型最大上下文 (token)",
+    "hint": "你的 embedding 模型的上下文长度，如 1024。0=不限。设置后切块大小自动钳制到该值减 32 token（预留特殊 token），防止超长块让模型截断或服务端卡死。"
+  },
+  "embed_batch_size": {
+    "type": "int",
+    "default": 16,
+    "description": "单次请求 embedding 条数",
+    "hint": "一个 HTTP 请求里塞多少条文本。本地小模型（如 llama.cpp 跑的）建议调小到 4，云端 API 保持 16。"
+  },
+  "embed_concurrency": {
+    "type": "int",
+    "default": 3,
+    "description": "embedding 并发请求数",
+    "hint": "同时发多少个 embedding 请求。本地小模型建议 1，云端 API 保持 3。"
+  },
+  "inject_files": {
+    "type": "list",
+    "default": [
+      "MEMORY.md"
+    ],
+    "description": "注入 system prompt 的文件",
+    "hint": ".md 文件名列表，内容会拼进 system prompt。MEMORY.md 取当前会话自己空间里的（每个会话一本小本子）；其他文件先在会话空间找、找不到再到 memory 根找（共享）。人设建议用 AstrBot 自带人设卡，不用走文件。"
+  },
+  "notebook_name": {
+    "type": "string",
+    "default": "小本子",
+    "description": "小本子的名字",
+    "hint": "注入指令块里使用的称呼，agent 确认稳定事实时会按这个名字跟用户说。"
+  },
+  "digest_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "摘要+原文捕获与自动日记",
+    "hint": "关闭后钩子不捕获压缩摘要、不追加原文、worker 不写日记。"
+  },
+  "digest_time": {
+    "type": "string",
+    "default": "23:30",
+    "description": "每日总结时刻 (HH:MM)",
+    "hint": "日记 worker 触发时刻，天数边界跟着它走：一天=上次总结→本次总结，凌晨内容归下一天文件。"
+  },
+  "boundary_inject": {
+    "type": "bool",
+    "default": true,
+    "description": "一天边界说明注入",
+    "hint": "向 system prompt 注入一句『一天原文与日记从结算时刻到次日结算时刻，文件名是结算日日期』的口径说明，模型 grep 原文、指定 time_range 时能理解文件名的日期含义。关闭后只注入记忆文件指针。"
+  },
+  "capture_think_chars": {
+    "type": "int",
+    "default": 0,
+    "description": "think 截留长度 (字符)",
+    "hint": "捕获原文时 〔think〕 内容截留多少字符，0=整段跳过（默认，降噪），>0=保留前 N 字符并标注总长。"
+  },
+  "capture_tool_chars": {
+    "type": "int",
+    "default": 0,
+    "description": "工具结果截留长度 (字符)",
+    "hint": "捕获原文时工具结果截留多少字符，0=整段跳过（默认，降噪），>0=保留前 N 字符。"
+  },
+  "digest_state_budget": {
+    "type": "int",
+    "default": 24000,
+    "description": "日记检查点输入预算 (token)",
+    "hint": "结算时摘要检查点（滚动摘要各时刻快照）的输入预算，超出则保留最早一条并自最新往前取，防止极端压缩天数喂爆日记模型。"
+  },
+  "digest_session_whitelist": {
+    "type": "list",
+    "default": [],
+    "description": "会话白名单（会话清单）",
+    "hint": "在目标会话发送 /sid 获取会话信息，把输出的 UMO（统一消息源，即三段冒号那串，例如 user:FriendMessage:12345678）整串填进来，一行一个，也可只填能唯一区分的片段。命中的会话才有自己的记忆空间（捕获原文+小本子+日记+独立向量库），没命中的会话完全静默。留空=所有会话都启用。"
+  },
+  "diary_provider_id": {
+    "type": "string",
+    "default": "",
+    "description": "写日记的 LLM Provider ID（留空使用主 LLM）",
+    "hint": "点右侧按钮从已启用的对话模型里选；留空时自动复用当前主 LLM。",
+    "_special": "select_provider"
+  },
+  "diary_persona_id": {
+    "type": "string",
+    "default": "",
+    "description": "日记人设卡",
+    "hint": "点右侧按钮从人设管理里选，其 system_prompt 会作为日记的角色卡；留空用通用日记口吻。",
+    "_special": "select_persona"
+  },
+  "tail_summary_threshold": {
+    "type": "int",
+    "default": 2000,
+    "description": "补尾摘要阈值 (token)",
+    "hint": "补尾原文超过该 token 数时先摘要再进日记输入，否则直接给原文。"
+  },
+  "raw_ttl_days": {
+    "type": "int",
+    "default": 0,
+    "description": "原文保留天数",
+    "hint": "0=永久；到期 worker 重写老文件：留日记段、删原文段，无日记则整删。"
+  },
+  "reindex_min_delta_tokens": {
+    "type": "int",
+    "default": 2000,
+    "description": "watcher 增量阈值 (token)",
+    "hint": "已索引 .md 文件变化后，增量内容不足该 token 数时跳过重建，超过才整文件重建。防当日文件高频追加导致反复全量 embedding。"
+  }
+}
