@@ -21,7 +21,7 @@ AstrBot 三层记忆插件。为每个会话维护独立的小本子（长期记
 
 ```bash
 .venv\Scripts\activate
-pip install chromadb
+pip install chromadb filelock
 git clone git@github.com:bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
 ```
 
@@ -62,19 +62,21 @@ git clone git@github.com:bingchengcc/simple_memory.git data/plugins/astrbot_plug
 ```
 <workspace_path>/
 └── <会话ID冒号换下划线>/
-    ├── MEMORY.md                 # 小本子
+    ├── MEMORY.md                    # 小本子
     ├── memory/
-    │   ├── YYYY-MM-DD.md         # 每日原文（grep）
-    │   ├── YYYY-MM-DD.summary.md # 压缩摘要（grep 优先）
-    │   └── diary/YYYY-MM-DD.md   # 每日日记（向量）
-    └── chroma/                   # 独立向量库
+    │   ├── YYYY-MM-DD/
+    │   │   ├── raw.md               # 每日原文（grep，超32KB自动切 raw_2.md）
+    │   │   └── summary.md           # 压缩摘要（grep 优先）
+    │   └── diary/
+    │       └── YYYY-MM-DD.md        # 每日日记（向量检索）
+    └── chroma/                      # 独立向量库
 ```
 
 ## 可用工具（llm_tool）
 
 | 工具 | 用途 |
 |---|---|
-| `memory_search(query, source, time_range)` | 双层检索（向量 + grep） |
+| `memory_search(query, source, time_range, date)` | 双层检索（向量 + grep），date 可锁定某天 |
 | `memory_read()` | 读取小本子全文 |
 | `memory_append(content)` | 追加一条记忆 |
 | `memory_edit(num, content)` | 修改指定条目 |

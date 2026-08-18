@@ -4,3 +4,5 @@ debug.log
 工程报告/
 测试脚本/
 data/
+MEMORY.md
+*.lock
