@@ -94,7 +94,7 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 
 改 `digest_time` 后注入到 system prompt 的边界说明自动跟随。
 
-> ⚠️ **修改 `digest_time` 不仅影响结算时间，也会改变消息的日历归属边界。** 例如从 23:30 改为 06:00，则凌晨 2 点的消息会归到前一天而非当天。
+> ⚠️ **修改 `digest_time` 不仅影响结算时间，也会改变消息的日历归属边界。** 例如从 23:30 改为 06:00，则晚上 10 点的消息会从"当天文件"变为"次日文件"（因为 22:00 已过 06:00 边界）。
 
 ## 命令
 

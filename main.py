@@ -508,7 +508,7 @@ class SimpleMemory(Star):
             return
         rel = path.relative_to(self.workspace / dir_name).as_posix()
         if rel == "MEMORY.md":
-            self._inject_cache.pop(dir_name, None)
+            self._invalidate_session_cache(dir_name)
             return
         if not self._is_diary_path(path, dir_name):
             return  # 原文走 grep，不建索引
@@ -529,7 +529,7 @@ class SimpleMemory(Star):
             return
         rel = path.relative_to(self.workspace / dir_name).as_posix()
         if rel == "MEMORY.md":
-            self._inject_cache.pop(dir_name, None)
+            self._invalidate_session_cache(dir_name)
             return
         if not self._is_diary_path(path, dir_name):
             return
@@ -543,17 +543,23 @@ class SimpleMemory(Star):
                     f"simple_memory 已移除索引: {self._state_key(dir_name, rel)}"
                 )
 
+    def _invalidate_session_cache(self, session_id: str) -> None:
+        """移除指定 session 的所有缓存条目（兼容带日期的 key）。"""
+        for k in [k for k in self._inject_cache if k.startswith(session_id + ":")]:
+            del self._inject_cache[k]
+
     @filter.on_llm_request()
     async def _inject(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
         if not self.enabled or not self._inited:
             return
         session_id = req.session_id or str(event.unified_msg_origin)
-        text = self._inject_cache.get(session_id)
+        cache_key = f"{session_id}:{cycle_file_date(datetime.now(), self.spaces.digest_time)}"
+        text = self._inject_cache.get(cache_key)
         if text is None:
             text = self._build_inject(session_id)
             if not text:
                 return
-            self._inject_cache[session_id] = text
+            self._inject_cache[cache_key] = text
             _dbg(f"_inject built session={session_id[:24]} len={len(text)}")
         sp = req.system_prompt or ""
         if INJECT_MARKER not in sp:
@@ -796,6 +802,7 @@ class SimpleMemory(Star):
             new, num = append_text(old, content, time.strftime("%Y-%m-%d %H:%M"))
             self._notebook_bak(p)
             p.write_text(new, encoding="utf-8")
+            self._invalidate_session_cache(session_id)
         return f"已记入小本子第 {num} 条：{content.strip()}"
 
     @filter.llm_tool(name="memory_edit")
@@ -819,6 +826,7 @@ class SimpleMemory(Star):
                 return f"没找到第 {int(num)} 条，先用 memory_read 看现有条目"
             self._notebook_bak(p)
             p.write_text(new, encoding="utf-8")
+            self._invalidate_session_cache(session_id)
         return f"已修改小本子第 {int(num)} 条：{content.strip()}"
 
     @filter.llm_tool(name="memory_delete")
@@ -841,6 +849,7 @@ class SimpleMemory(Star):
                 return f"没找到第 {int(num)} 条，先用 memory_read 看现有条目"
             self._notebook_bak(p)
             p.write_text(new, encoding="utf-8")
+            self._invalidate_session_cache(session_id)
         return f"已删除小本子第 {int(num)} 条"
 
     @filter.llm_tool(name="memory_write")
@@ -872,6 +881,7 @@ class SimpleMemory(Star):
                 warning = "（注意：新内容不到旧内容一半）"
             self._notebook_bak(p)
             p.write_text(content.strip() + "\n", encoding="utf-8")
+            self._invalidate_session_cache(session_id)
         return f"已重写小本子。{warning}"
 
     @filter.command_group("mem")

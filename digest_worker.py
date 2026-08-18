@@ -181,18 +181,21 @@ class DigestWorker:
             mem_dir = daily.memory_dir
             if not mem_dir.is_dir():
                 continue
-            for f in sorted(mem_dir.iterdir()):
-                m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.md", f.name)
+            for sub in sorted(mem_dir.iterdir()):
+                if not sub.is_dir() or sub.name == "diary":
+                    continue
+                m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})", sub.name)
                 if not m or m.group(1) >= today:
                     continue
-                if f.stat().st_size == 0:
-                    continue
                 day_str = m.group(1)
+                raw_files = sorted(sub.glob("raw*.md"))
+                raw_text = ""
+                for rf in raw_files:
+                    raw_text += rf.read_text(encoding="utf-8", errors="ignore").strip()
+                if not raw_text:
+                    continue
                 diary_path = self.diary_file_for(sid).path_for_date(day_str)
                 if diary_path.is_file() and diary_path.stat().st_size > 0:
-                    continue
-                raw_text = f.read_text(encoding="utf-8", errors="ignore").strip()
-                if not raw_text:
                     continue
                 logger.info(
                     f"simple_memory 启动补跑：{sid[:16]} {day_str} 有raw无diary"
@@ -536,27 +539,26 @@ class DigestWorker:
             d = self.daily_file_for(sid).memory_dir
             if not d.is_dir():
                 continue
-            for f in sorted(d.iterdir()):
-                m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.md", f.name)
+            for sub in sorted(d.iterdir()):
+                if not sub.is_dir() or sub.name == "diary":
+                    continue
+                m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})", sub.name)
                 if not m or m.group(1) >= cutoff:
                     continue
-                text = f.read_text(encoding="utf-8", errors="ignore")
-                lines = text.splitlines(keepends=True)
-                i = next(
-                    (
-                        k
-                        for k, l in enumerate(lines)
-                        if l.startswith("## [") and "[diary]" in l
-                    ),
-                    None,
-                )
-                if i is None:
-                    f.unlink()
+                day_str = m.group(1)
+                diary = self.diary_file_for(sid).path_for_date(day_str)
+                raws = sorted(sub.glob("raw*.md"))
+                if not raws:
+                    continue
+                if diary.is_file() and diary.stat().st_size > 0:
+                    for rf in raws:
+                        rf.unlink()
                     logger.info(
-                        f"simple_memory 原文过期无日记，删除 {sid[:16]}/{f.name}"
+                        f"simple_memory 原文过期留日记 {sid[:16]}/{day_str}（删 {len(raws)} 个 raw）"
                     )
                 else:
-                    f.write_text("".join(lines[i:]), encoding="utf-8")
+                    import shutil
+                    shutil.rmtree(sub)
                     logger.info(
-                        f"simple_memory 原文过期留日记 {sid[:16]}/{f.name}（删原文 {i} 行）"
+                        f"simple_memory 原文过期无日记，删除 {sid[:16]}/{day_str}/"
                     )
