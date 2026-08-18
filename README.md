@@ -72,7 +72,7 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 | `capture_think_chars` | 0 | 思考段截留长度，0=跳过（不建议开启，会将模型偶发的 think 泄漏永久存档） |
 | `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
 | `digest_state_budget` | 24000 | 摘要检查点输入预算（token） |
-| `digest_session_whitelist` | （空） | 会话白名单（UMO 片段），留空=全部启用 |
+| `digest_session_whitelist` | | 会话白名单（UMO 片段），留空=全部启用 |
 | `diary_provider_id` | | 写日记的 LLM 提供商 ID |
 | `diary_persona_id` | | 日记人设卡 ID |
 | `tail_summary_threshold` | 2000 | 补尾摘要阈值（token） |
