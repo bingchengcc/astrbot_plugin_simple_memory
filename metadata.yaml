@@ -2,6 +2,6 @@ name: astrbot_plugin_simple_memory
 display_name: Simple Memory
 desc: 三层记忆：小本子注入 system prompt、日记向量化语义检索、压缩摘要落盘、每日原文 grep 关键词检索，按会话隔离存储
 short_desc: 本地三层记忆，向量+摘要+原文分层检索
-author: tuan
+author: 冰城cc
 version: 0.2.0
 astrbot_version: ">=4.5.1,<5"
