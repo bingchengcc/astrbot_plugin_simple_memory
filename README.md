@@ -13,6 +13,22 @@ AstrBot 三层记忆插件。为每个会话维护独立的小本子（长期记
 - **启动补跑**：插件启动时检测漏掉的天，自动补写日记
 - **按会话隔离**：每个白名单会话独立空间（小本子、原文、日记、向量库完全隔离）
 
+## 工作原理
+
+```
+每条用户消息
+  └ 钩子捕获 → 原文按天落盘 + 压缩摘要检查点
+
+每天 digest_time
+  └ 结算 worker → 全量 states + 尾巴 → 人设 LLM → 日记
+
+每请求（注入）
+  └ system prompt += 小本子全文 + 记忆指针 + 边界说明
+
+按需（召回）
+  └ memory_search → 向量层(diary 语义) + grep 层(summary/原文/小本子)
+```
+
 ## 安装
 
 **WebUI**：插件市场 → 手动安装，填仓库地址。
@@ -20,8 +36,14 @@ AstrBot 三层记忆插件。为每个会话维护独立的小本子（长期记
 **命令行**（在 AstrBot 根目录执行）：
 
 ```bash
+# Windows
 .venv\Scripts\activate
-pip install chromadb filelock
+pip install chromadb watchdog filelock
+git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
+
+# Linux
+source .venv/bin/activate
+pip install chromadb watchdog filelock
 git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
 ```
 
@@ -40,25 +62,24 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 | `embedding_provider_id` | | Embedding 提供商 ID（必填） |
 | `chunk_size` / `chunk_overlap` | 384 / 64 | 向量切块参数（token） |
 | `embed_max_ctx` | 0（不限） | Embedding 模型上下文窗口，设置后切块自动钳制 |
-| `embed_batch_size` | 16 | Embedding 批大小（本地小模型建议4） |
-| `embed_concurrency` | 3 | Embedding 并发数（本地小模型建议1） |
+| `embed_batch_size` | 16 | Embedding 批大小（本地小模型建议 4） |
+| `embed_concurrency` | 3 | Embedding 并发数（本地小模型建议 1） |
 | `inject_files` | ["MEMORY.md"] | 注入到 system prompt 的文件 |
 | `notebook_name` | 小本子 | 指令块中对小本子的称呼 |
 | `digest_enabled` | true | 捕获 + 日记总开关 |
 | `digest_time` | 23:30 | 天数边界 + 结算时刻 |
 | `boundary_inject` | true | 是否注入"一天边界"说明 |
+| `capture_think_chars` | 0 | 思考段截留长度，0=跳过（不建议开启，会将模型偶发的 think 泄漏永久存档） |
+| `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
+| `digest_state_budget` | 24000 | 摘要检查点输入预算（token） |
 | `digest_session_whitelist` | [] | 会话白名单（UMO 片段），空=全部启用 |
 | `diary_provider_id` | | 写日记的 LLM 提供商 ID |
 | `diary_persona_id` | | 日记人设卡 ID |
 | `tail_summary_threshold` | 2000 | 补尾摘要阈值（token） |
 | `raw_ttl_days` | 0 | 原文保留天数，0=永久。到期后有日记则只删原文，无日记则整删当天文件夹 |
-
 | `grep_max_files` | 20 | grep 搜索最大文件数 |
 | `grep_max_results` | 8 | grep 最大返回条数 |
 | `vector_max_results` | 5 | 向量检索最大返回条数 |
-| `capture_think_chars` | 0 | 思考段截留长度，0=跳过（不建议开启，会将模型偶发的 think 泄漏永久存档） |
-| `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
-| `digest_state_budget` | 24000 | 摘要检查点输入预算（token） |
 
 ## 存储布局
 
