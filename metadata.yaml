@@ -1,7 +1,7 @@
 name: astrbot_plugin_simple_memory
-display_name: Simple Memory
-desc: 三层记忆：小本子注入 system prompt、日记向量化语义检索、压缩摘要落盘、每日原文 grep 关键词检索，按会话隔离存储
-short_desc: 本地三层记忆，向量+摘要+原文分层检索
+display_name: 轻量记忆
+desc: AI 有自己的小本子、日记和翻旧账能力，零外部依赖
+short_desc: 轻量记忆，小本子+日记+原文
 author: 冰城cc
 version: 0.2.1
 repo: https://github.com/bingchengcc/astrbot_plugin_simple_memory
