@@ -39,12 +39,12 @@ AstrBot 三层记忆插件。为每个会话维护独立的小本子（长期记
 # Windows
 .venv\Scripts\activate
 pip install chromadb watchdog filelock
-git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
+git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/plugins/astrbot_plugin_simple_memory
 
 # Linux
 source .venv/bin/activate
 pip install chromadb watchdog filelock
-git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
+git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/plugins/astrbot_plugin_simple_memory
 ```
 
 重启 AstrBot。

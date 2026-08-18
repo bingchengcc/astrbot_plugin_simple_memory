@@ -4,7 +4,7 @@ desc: 三层记忆：小本子注入 system prompt、日记向量化语义检索
 short_desc: 本地三层记忆，向量+摘要+原文分层检索
 author: 冰城cc
 version: 0.2.1
-repo: https://github.com/bingchengcc/simple_memory
+repo: https://github.com/bingchengcc/astrbot_plugin_simple_memory
 social_link: https://github.com/bingchengcc
 astrbot_version: ">=4.5.1,<5"
 tags:
