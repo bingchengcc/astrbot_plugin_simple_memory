@@ -36,3 +36,5 @@ M6 剩余：①M6-1 锚点重渲染 fp 查重（08-17 被灌 164KB 重复，主�
 - [2026-08-18 00:26:50] [NOTE] DECISION: AstrBot DB消息无稳定ID(只有role+content)，FP用index是当前最优解；压缩后index漂移最坏情况是边界几条重复写一次，对记忆系统可接受。0.1.1若AstrBot升级加了ID再换
 - [2026-08-18 00:30:49] [NOTE] NOTE: PLAN第五版.md已写(00:30)：0.1.1=FP升级/status完善/测试补/版本号；0.2.0=SessionStore版本化/日志统一/并发锁/原文分段；预留=多provider/小本子摘要/跨会话/时间旅行
 - [2026-08-18 15:06:40] [NOTE] 0.1.1: /mem status 完善（embedding状态+小本字数+原文行数），版本号 0.1.0→0.1.1，import 加 parse_entries
+- [2026-08-18 20:37:02] [NOTE] AstrBot core bug: streaming path (webchat) skips OnAfterMessageSentEvent dispatch → _capture hook never fires. Patched WSL AstrBot (respond/stage.py) + submitted PR #9733 to AstrBotDevs/AstrBot. Fork: bingchengcc/AstrBot, branch: fix/streaming-after-message-sent-event. GitHub PAT saved to MEMORY.md #9.
+- [2026-08-18 20:44:33] [NOTE] S4 webchat raw capture verified working (2026-08-18 20:44): 3 test messages all captured to raw.md with correct checkpoint fingerprints. PR #9733 submitted to AstrBotDevs/AstrBot. log_level reverted to INFO. WSL AstrBot running on port 6186.

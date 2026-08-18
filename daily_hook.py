@@ -175,8 +175,6 @@ class ContextDiffer:
     async def process(self, session_id: str) -> None:
         msgs = await self._fetch_full(session_id)
         if not msgs:
-            from .main import _dbg
-            _dbg(f"_fetch_full empty session={session_id[:24]}")
             return
         entry = await self.store.get(session_id)
         snap = entry.get("snapshot") or {}

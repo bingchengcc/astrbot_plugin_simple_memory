@@ -10,7 +10,8 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.provider import ProviderRequest
+from astrbot.api.provider import LLMResponse, ProviderRequest
+from astrbot.core.message.message_event_result import ResultContentType
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.star.filter.command import GreedyStr
 
@@ -27,17 +28,7 @@ from .watcher import FileWatcher
 INJECT_MARKER = "\n# Memory Context\n\n"
 
 
-def _dbg(msg: str) -> None:
-    try:
-        with open(
-            StarTools.get_data_dir("astrbot_plugin_simple_memory")
-            / "debug.log",
-            "a",
-            encoding="utf-8",
-        ) as f:
-            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}" + chr(10))
-    except Exception:
-        pass
+from .debug_logger import _dbg
 
 
 def _scan_cmd_handlers() -> None:
@@ -568,22 +559,44 @@ class SimpleMemory(Star):
         if INJECT_MARKER not in sp:
             req.system_prompt = sp + INJECT_MARKER + text
 
-    @filter.after_message_sent()
-    async def _capture(self, event: AstrMessageEvent) -> None:
+    @filter.on_llm_response()
+    async def _capture_streaming(
+        self, event: AstrMessageEvent, response: LLMResponse
+    ) -> None:
         if not self.enabled or not self.differ:
-            _dbg("_capture early: enabled/differ missing")
+            return
+        result = event.get_result()
+        if result is None:
+            return
+        rct = result.result_content_type
+        if rct not in (
+            ResultContentType.STREAMING_RESULT,
+            ResultContentType.STREAMING_FINISH,
+        ):
+            return
+        if event.get_extra("simple_memory_captured"):
             return
         try:
             session_id = str(event.unified_msg_origin)
-            _dbg(f"_capture fired session={session_id[:30]}")
             if not self.spaces.is_active(session_id):
-                _dbg(f"_capture 跳过非活跃会话 {session_id[:24]}")
+                return
+            event.set_extra("simple_memory_captured", True)
+            await self.differ.process(session_id)
+        except Exception:
+            logger.exception("simple_memory 流式捕获失败")
+
+    @filter.after_message_sent()
+    async def _capture(self, event: AstrMessageEvent) -> None:
+        if not self.enabled or not self.differ:
+            return
+        try:
+            session_id = str(event.unified_msg_origin)
+            if event.get_extra("simple_memory_captured"):
+                return
+            if not self.spaces.is_active(session_id):
                 return
             await self.differ.process(session_id)
         except Exception:
-            import traceback
-
-            _dbg("_capture 异常: " + traceback.format_exc(limit=3))
             logger.exception("simple_memory 上下文捕获失败")
 
     @filter.llm_tool(name="memory_search")
@@ -593,6 +606,7 @@ class SimpleMemory(Star):
         query: str,
         source: str = "all",
         time_range: str = "",
+        date: str = "",
     ) -> str:
         """搜索记忆库（日记走向量检索，原文和小本子走 grep）。
 
@@ -600,6 +614,7 @@ class SimpleMemory(Star):
             query(string): 搜索关键词或自然语言描述
             source(string): 来源过滤，all=日记向量+原文和小本子 grep（默认），diary=只查日记向量，raw=只 grep
             time_range(string): 时间范围，如 7d=最近7天、24h=最近24小时，留空不限
+            date(string): 具体日期(YYYY-MM-DD)或 "all"，锁定某天的文件夹 grep
         """
         t = self._embedder_task
         if t is not None and not t.done():
@@ -628,13 +643,14 @@ class SimpleMemory(Star):
                     f"[日记 | {h.file} | {ts} | score {h.score}]\n{h.text}"
                 )
         if src in ("all", "raw"):
-            parts.extend(self._grep_search(session_id, query, time_range))
+            date_filter = (date or "").strip().lower()
+            parts.extend(self._grep_search(session_id, query, time_range, date_filter))
         if not parts:
             return "未找到相关记忆"
         return "\n---\n".join(parts)
 
     def _grep_search(
-        self, session_id: str, query: str, time_range: str = ""
+        self, session_id: str, query: str, time_range: str = "", date_filter: str = ""
     ) -> list[str]:
         q = (query or "").strip().lower()
         if not q:
@@ -650,21 +666,23 @@ class SimpleMemory(Star):
         nb = self.spaces.notebook_path(session_id)
         if nb.is_file():
             cands.append(nb)
-        # 7.3D: summary.md 优先（结构化经验，密度高）
-        summaries = sorted(
-            [
-                f
-                for f in self.spaces.memory_dir(session_id).glob("*.summary.md")
-                if f.is_file()
-            ],
-            key=lambda p: p.stem.replace(".summary", ""),
-            reverse=True,
+        # summary.md 优先（新结构: memory/YYYY-MM-DD/summary.md，兼容旧: *.summary.md）
+        mem_dir = self.spaces.memory_dir(session_id)
+        summaries: list[Path] = []
+        for sub in mem_dir.iterdir() if mem_dir.is_dir() else []:
+            if sub.is_dir() and sub.name != "diary":
+                sp = sub / "summary.md"
+                if sp.is_file():
+                    summaries.append(sp)
+        summaries.extend(
+            f for f in mem_dir.glob("*.summary.md") if f.is_file()
         )
-        if cutoff:
+        if date_filter and date_filter != "all":
+            summaries = [f for f in summaries if date_filter in str(f)]
+        elif cutoff:
             kept_sum = []
             for f in summaries:
-                stem = f.stem.replace(".summary", "")
-                dm2 = re.fullmatch(r"(\d{4}-\d{2}-\d{2})", stem)
+                dm2 = re.search(r"(\d{4}-\d{2}-\d{2})", str(f))
                 if dm2:
                     y2, mo2, d2 = (int(x) for x in dm2.group(1).split("-"))
                     if date(y2, mo2, d2) >= cutoff:
@@ -673,11 +691,14 @@ class SimpleMemory(Star):
                     kept_sum.append(f)
             summaries = kept_sum
         cands.extend(summaries[:10])
+        # raw files
         raws = sorted(self.spaces.raw_files(session_id), reverse=True)
-        if cutoff:
+        if date_filter and date_filter != "all":
+            raws = [f for f in raws if date_filter in str(f)]
+        elif cutoff:
             kept = []
             for f in raws:
-                dm = re.fullmatch(r"(\d{4}-\d{2}-\d{2})", f.stem)
+                dm = re.search(r"(\d{4}-\d{2}-\d{2})", str(f))
                 if dm:
                     y, mo, d = (int(x) for x in dm.group(1).split("-"))
                     if date(y, mo, d) >= cutoff:

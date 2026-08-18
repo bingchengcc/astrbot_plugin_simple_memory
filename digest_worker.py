@@ -20,18 +20,11 @@ CATCHUP_RAW_CAP = 8000
 SUMMARY_INPUT_CAP = 20000
 
 
+from .debug_logger import _dbg as _dbg_raw
+
+
 def _dbg(msg: str) -> None:
-    try:
-        from astrbot.api.star import StarTools
-        with open(
-            StarTools.get_data_dir("astrbot_plugin_simple_memory") / "debug.log", "a", encoding="utf-8"
-        ) as f:
-            f.write(
-                f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [worker] {msg}"
-                + chr(10)
-            )
-    except Exception:
-        pass
+    _dbg_raw(msg, tag="worker")
 
 DIARY_RULES = """日记死规矩：
 - 只记决定/结论/踩的坑/偏好，不抄代码
