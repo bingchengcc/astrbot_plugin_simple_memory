@@ -131,9 +131,9 @@
   },
   "reindex_min_delta_tokens": {
     "type": "int",
-    "default": 2000,
+    "default": 1,
     "description": "watcher 增量阈值 (token)",
-    "hint": "已索引 .md 文件变化后，增量内容不足该 token 数时跳过重建，超过才整文件重建。防当日文件高频追加导致反复全量 embedding。"
+    "hint": "diary 文件变化后，增量不足该 token 数时跳过重建。diary 文件小（几百 token），默认 1 即有变化就重建。"
   },
   "grep_max_files": {
     "type": "int",
