@@ -662,9 +662,10 @@ class SimpleMemory(Star):
             src = "all"
         parts: list[str] = []
         if src in ("all", "diary"):
+            vector_max = int(self.cfg.get("vector_max_results") or 5)
             hits = await self.spaces.searcher(
                 session_id, self.embedder.dim, self.embedder
-            ).search(query=query, time_range=time_range, top_k=5)
+            ).search(query=query, time_range=time_range, top_k=vector_max)
             for h in hits:
                 ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(h.timestamp))
                 parts.append(
@@ -715,6 +716,8 @@ class SimpleMemory(Star):
                     kept_sum.append(f)
             summaries = kept_sum
         cands.extend(summaries[:10])
+        grep_max_files = int(self.cfg.get("grep_max_files") or 20)
+        grep_max_results = int(self.cfg.get("grep_max_results") or 8)
         # raw files
         raws = sorted(self.spaces.raw_files(session_id), reverse=True)
         if date_filter and date_filter != "all":
@@ -730,7 +733,7 @@ class SimpleMemory(Star):
                 else:
                     kept.append(f)
             raws = kept
-        cands.extend(raws[:20])
+        cands.extend(raws[:grep_max_files])
         out: list[str] = []
         for f in cands:
             try:
@@ -751,9 +754,9 @@ class SimpleMemory(Star):
                 hits += 1
                 if hits >= 4:
                     break
-            if len(out) >= 8:
+            if len(out) >= grep_max_results:
                 break
-        return out[:8]
+        return out[:grep_max_results]
 
     def _notebook_path(self, event: AstrMessageEvent) -> Path:
         session_id = str(event.unified_msg_origin)

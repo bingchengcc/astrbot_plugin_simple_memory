@@ -53,6 +53,9 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 | `tail_summary_threshold` | 2000 | 补尾摘要阈值（token） |
 | `raw_ttl_days` | 0 | 原文保留天数，0=永久 |
 | `reindex_min_delta_tokens` | 2000 | diary 增量重建索引阈值 |
+| `grep_max_files` | 20 | grep 搜索最大文件数 |
+| `grep_max_results` | 8 | grep 最大返回条数 |
+| `vector_max_results` | 5 | 向量检索最大返回条数 |
 | `capture_think_chars` | 0 | 思考段截留长度，0=跳过（不建议开启，会将模型偶发的 think 泄漏永久存档） |
 | `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
 | `digest_state_budget` | 24000 | 摘要检查点输入预算（token） |

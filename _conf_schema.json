@@ -134,5 +134,23 @@
     "default": 2000,
     "description": "watcher 增量阈值 (token)",
     "hint": "已索引 .md 文件变化后，增量内容不足该 token 数时跳过重建，超过才整文件重建。防当日文件高频追加导致反复全量 embedding。"
+  },
+  "grep_max_files": {
+    "type": "int",
+    "default": 20,
+    "description": "grep 检索最大文件数",
+    "hint": "grep 搜索时最多扫描多少个 raw 文件（按最新优先）。调大可搜更多历史，但响应变慢。"
+  },
+  "grep_max_results": {
+    "type": "int",
+    "default": 8,
+    "description": "grep 最大返回条数",
+    "hint": "grep 搜索单次最多返回多少条匹配结果。"
+  },
+  "vector_max_results": {
+    "type": "int",
+    "default": 5,
+    "description": "向量检索最大返回条数",
+    "hint": "diary 语义搜索单次最多返回多少条结果。"
   }
 }
