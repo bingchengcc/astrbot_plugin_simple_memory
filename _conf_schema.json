@@ -127,7 +127,7 @@
     "type": "int",
     "default": 0,
     "description": "原文保留天数",
-    "hint": "0=永久；到期 worker 重写老文件：留日记段、删原文段，无日记则整删。"
+    "hint": "0=永久；到期后有日记则只删原文（raw*.md），无日记则删整个日期文件夹。日记始终保留。"
   },
   "reindex_min_delta_tokens": {
     "type": "int",
