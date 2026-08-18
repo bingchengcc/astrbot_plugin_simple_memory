@@ -241,7 +241,7 @@ class SimpleMemory(Star):
             "name": "astrbot_plugin_simple_memory",
             "author": "冰城cc",
             "description": "三层记忆：向量检索 + system prompt 注入 + 每日日记 + 共同小本子",
-            "version": "0.2.0",
+            "version": "0.2.1",
         }
 
     def _vdb_for(self, session_id: str):
@@ -847,11 +847,12 @@ class SimpleMemory(Star):
     async def memory_write(
         self, event: AstrMessageEvent, content: str, confirm: bool = False
     ) -> str:
-        """整篇重写小本子（MEMORY.md），逃生门，慎用。
+        """整篇重写小本子（MEMORY.md）。⚠️ 高风险操作：会覆盖全部已有条目，丢失不可恢复。
+除非用户明确要求'重写小本子'，否则应优先使用 memory_append/edit/delete 做局部修改。
 
         Args:
             content(string): 新的全文
-            confirm(boolean): 设为 true 才真正写入；false 时返回大小对比
+            confirm(boolean): 设为 true 才真正写入；false 时仅返回大小对比供确认
         """
         session_id = str(event.unified_msg_origin)
         if not self.spaces.is_active(session_id):

@@ -53,7 +53,7 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 | `tail_summary_threshold` | 2000 | 补尾摘要阈值（token） |
 | `raw_ttl_days` | 0 | 原文保留天数，0=永久 |
 | `reindex_min_delta_tokens` | 2000 | diary 增量重建索引阈值 |
-| `capture_think_chars` | 0 | 思考段截留长度，0=跳过 |
+| `capture_think_chars` | 0 | 思考段截留长度，0=跳过（不建议开启，会将模型偶发的 think 泄漏永久存档） |
 | `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
 | `digest_state_budget` | 24000 | 摘要检查点输入预算（token） |
 
@@ -74,14 +74,16 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 
 ## 可用工具（llm_tool）
 
-| 工具 | 用途 |
+| 场景 | 工具 |
 |---|---|
-| `memory_search(query, source, time_range, date)` | 双层检索（向量 + grep），date 可锁定某天 |
-| `memory_read()` | 读取小本子全文 |
-| `memory_append(content)` | 追加一条记忆 |
-| `memory_edit(num, content)` | 修改指定条目 |
-| `memory_delete(num)` | 删除指定条目 |
-| `memory_write(content)` | 整篇重写（逃生门） |
+| 找过去发生了什么 | `memory_search(query, source, time_range, date)` |
+| 查看稳定用户事实 | `memory_read()` |
+| 新增一条稳定事实 | `memory_append(content)` |
+| 修改已有事实 | `memory_edit(num, content)` |
+| 删除错误事实 | `memory_delete(num)` |
+| 用户明确要求重写整本小本子 | `memory_write(content, confirm=true)` ⚠️ |
+
+> ⚠️ `memory_write` 是整篇覆盖，丢失不可恢复。优先用 append/edit/delete 做局部修改。
 
 ## 一天边界
 
@@ -91,6 +93,8 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 - 每日结算在该时刻自动执行
 
 改 `digest_time` 后注入到 system prompt 的边界说明自动跟随。
+
+> ⚠️ **修改 `digest_time` 不仅影响结算时间，也会改变消息的日历归属边界。** 例如从 23:30 改为 06:00，则凌晨 2 点的消息会归到前一天而非当天。
 
 ## 命令
 
