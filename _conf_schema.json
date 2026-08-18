@@ -129,12 +129,7 @@
     "description": "原文保留天数",
     "hint": "0=永久；到期后有日记则只删原文（raw*.md），无日记则删整个日期文件夹。日记始终保留。"
   },
-  "reindex_min_delta_tokens": {
-    "type": "int",
-    "default": 1,
-    "description": "watcher 增量阈值 (token)",
-    "hint": "diary 文件变化后，增量不足该 token 数时跳过重建。diary 文件小（几百 token），默认 1 即有变化就重建。"
-  },
+
   "grep_max_files": {
     "type": "int",
     "default": 20,

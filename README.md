@@ -52,7 +52,7 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 | `diary_persona_id` | | 日记人设卡 ID |
 | `tail_summary_threshold` | 2000 | 补尾摘要阈值（token） |
 | `raw_ttl_days` | 0 | 原文保留天数，0=永久。到期后有日记则只删原文，无日记则整删当天文件夹 |
-| `reindex_min_delta_tokens` | 2000 | diary 增量重建索引阈值 |
+
 | `grep_max_files` | 20 | grep 搜索最大文件数 |
 | `grep_max_results` | 8 | grep 最大返回条数 |
 | `vector_max_results` | 5 | 向量检索最大返回条数 |

@@ -457,13 +457,7 @@ class SimpleMemory(Star):
         delta = raw[size:].decode("utf-8", errors="ignore")
         if not delta.strip():
             return False
-        tokens = self.embedder.count_tokens(delta)
-        threshold = int(self.cfg.get("reindex_min_delta_tokens") or 2000)
-        if tokens < threshold:
-            logger.info(
-                f"simple_memory watcher 跳过重建: {rel} 增量 {tokens} token < {threshold}"
-            )
-            return False
+        logger.info(f"simple_memory watcher 重建: {rel} 增量 {self.embedder.count_tokens(delta)} token")
         return True
 
     def _record_indexed(self, rel: str, path: Path) -> None:
