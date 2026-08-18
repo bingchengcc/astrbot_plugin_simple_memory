@@ -22,7 +22,7 @@ AstrBot 三层记忆插件。为每个会话维护独立的小本子（长期记
 ```bash
 .venv\Scripts\activate
 pip install chromadb filelock
-git clone git@github.com:bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
+git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_plugin_simple_memory
 ```
 
 重启 AstrBot。
