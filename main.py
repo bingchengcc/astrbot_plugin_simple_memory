@@ -694,7 +694,6 @@ class SimpleMemory(Star):
         nb = self.spaces.notebook_path(session_id)
         if nb.is_file():
             cands.append(nb)
-        # summary.md 优先（新结构: memory/YYYY-MM-DD/summary.md，兼容旧: *.summary.md）
         mem_dir = self.spaces.memory_dir(session_id)
         summaries: list[Path] = []
         for sub in mem_dir.iterdir() if mem_dir.is_dir() else []:
@@ -702,9 +701,6 @@ class SimpleMemory(Star):
                 sp = sub / "summary.md"
                 if sp.is_file():
                     summaries.append(sp)
-        summaries.extend(
-            f for f in mem_dir.glob("*.summary.md") if f.is_file()
-        )
         if date_filter and date_filter != "all":
             summaries = [f for f in summaries if date_filter in str(f)]
         elif cutoff:

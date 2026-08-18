@@ -97,8 +97,6 @@ class SpaceManager:
         for sub in d.iterdir():
             if sub.is_dir() and sub.name != "diary":
                 files.extend(sorted(sub.glob("raw*.md")))
-        # 兼容旧结构（扁平 .md 文件）
-        files.extend(sorted(f for f in d.glob("*.md") if not f.name.endswith(".summary.md")))
         return files
 
     def diary_files(self, session_id: str) -> list[Path]:
