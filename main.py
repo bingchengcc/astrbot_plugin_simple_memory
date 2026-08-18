@@ -94,6 +94,7 @@ class SimpleMemory(Star):
         self._notebook_lock = asyncio.Lock()
         self.notebook_name = str(cfg.get("notebook_name") or "小本子")
         self._inject_cache: dict[str, str] = {}
+        self._last_stream_ts: dict[str, float] = {}
         self._inited = False
         self._index_state: dict = {}
         self.digest_enabled: bool = bool(cfg.get("digest_enabled", True))
@@ -580,6 +581,11 @@ class SimpleMemory(Star):
             session_id = str(event.unified_msg_origin)
             if not self.spaces.is_active(session_id):
                 return
+            now = time.time()
+            last = self._last_stream_ts.get(session_id, 0)
+            if now - last < 2:
+                return
+            self._last_stream_ts[session_id] = now
             event.set_extra("simple_memory_captured", True)
             await self.differ.process(session_id)
         except Exception:
