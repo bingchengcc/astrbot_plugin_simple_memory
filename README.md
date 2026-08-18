@@ -136,6 +136,10 @@ git clone https://github.com/bingchengcc/simple_memory.git data/plugins/astrbot_
 - 原文零索引成本，纯 grep；向量库只嵌 diary 块（一天几块，量极小）
 - 本地 Embedding 模型推荐小参数量（<1B），避免 KV cache 压力
 
+## 致谢
+
+感谢 [meme_manager](https://github.com/anka-afk/astrbot_plugin_meme_manager) 的捕获流设计启发
+
 ## License
 
 MIT
