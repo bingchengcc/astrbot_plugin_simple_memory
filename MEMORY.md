@@ -32,3 +32,7 @@ M6 剩余：①M6-1 锚点重渲染 fp 查重（08-17 被灌 164KB 重复，主�
 - [2026-08-17 23:56:50] [NOTE] NOTE: 7.3A summary.md不写入根因修复：①plugin_set配置里旧名openclaw_memory没改→事件白名单过滤掉了hook ②压缩后DB消息数先减后增，snapshot count卡在旧值，msgs[count:]只取尾部扫不到index0的摘要→加了额外检查msgs[0]逻辑。plugin_set已改，代码已修，等重载后验证
 - [2026-08-17 23:57:20] [NOTE] DECISION: 7.3A全链路验证通过(23:57)：summary.md成功落盘含[经验 START/END]段。根因修复：①cmd_config.json plugin_set旧名改新名 ②daily_hook.py process()新增msgs[0]摘要兜底检测（处理压缩后snapshot count大于实际消息数的场景）
 - [2026-08-18 00:00:39] [NOTE] DECISION: M6-8重载绑定非确定不单独修了，插件README加一句"安装/更新后需完整重启AstrBot"即可，属平台限制非插件bug
+- [2026-08-18 00:17:11] [NOTE] DECISION: GitHub仓库已建(bingchengcc/simple_memory, private)，remote设为git@github.com:bingchengcc/simple_memory.git，首次push完成(5cb8c33)
+- [2026-08-18 00:26:50] [NOTE] DECISION: AstrBot DB消息无稳定ID(只有role+content)，FP用index是当前最优解；压缩后index漂移最坏情况是边界几条重复写一次，对记忆系统可接受。0.1.1若AstrBot升级加了ID再换
+- [2026-08-18 00:30:49] [NOTE] NOTE: PLAN第五版.md已写(00:30)：0.1.1=FP升级/status完善/测试补/版本号；0.2.0=SessionStore版本化/日志统一/并发锁/原文分段；预留=多provider/小本子摘要/跨会话/时间旅行
+- [2026-08-18 15:06:40] [NOTE] 0.1.1: /mem status 完善（embedding状态+小本字数+原文行数），版本号 0.1.0→0.1.1，import 加 parse_entries

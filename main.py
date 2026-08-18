@@ -17,7 +17,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from .digest_worker import DigestWorker
 from .daily_hook import ContextDiffer
 from .daily_md import DEFAULT_DIGEST_TIME, cycle_file_date
-from .notebook import append_text, delete_text, edit_text, find_dup_num
+from .notebook import append_text, delete_text, edit_text, find_dup_num, parse_entries
 from .memory_store.chunker import Chunker
 from .memory_store.embedder import Embedder
 from .session_store import SessionStore
@@ -369,16 +369,19 @@ class SimpleMemory(Star):
             datetime.strptime(day, "%Y-%m-%d").date() - timedelta(days=1)
         ).isoformat()
         dt = self.spaces.digest_time
-        diary = self.spaces.diary_dir(session_id) / f"{day}.md"
-        raw = self.spaces.memory_dir(session_id) / f"{day}.md"
-        lines = ["## 记忆文件"]
+        dir_name = self.spaces.dir_name(session_id)
+        diary_rel = f"{dir_name}/memory/diary/{day}.md"
+        raw_rel = f"{dir_name}/memory/{day}.md"
+        lines = [f"## 记忆文件（根: {self.workspace}）"]
         if self.boundary_inject:
             lines.append(
                 f"一天边界：一天原文与日记从 {dt} 到次日 {dt}，文件名是结算日日期。"
             )
         lines.append(
-            f"最新日记 {diary}（覆盖 {prev[5:]} {dt} → {day[5:]} {dt}）；"
-            f"当日原文在 {raw} 可直接读/grep，日记尚未生成"
+            f"最新日记: {diary_rel}（覆盖 {prev[5:]} {dt} → {day[5:]} {dt}）"
+        )
+        lines.append(
+            f"当日原文: {raw_rel}"
         )
         return "\n".join(lines)
 
@@ -836,21 +839,43 @@ class SimpleMemory(Star):
     async def mem_status(self, event: AstrMessageEvent) -> None:
         """查看索引与注入状态"""
         _dbg(f"mem status hit sender={event.get_sender_id()!r}")
-        if not self.embedder:
+        if not self.spaces:
             yield event.plain_result("记忆插件未启动（检查 enabled / workspace_path）")
             return
         session_id = str(event.unified_msg_origin)
-        count = self._vdb_for(session_id).count()
+
+        vdb_count = self._vdb_for(session_id).count() if self.embedder else 0
+
         raws = self.spaces.raw_files(session_id)
+        raw_lines = 0
+        for f in raws:
+            try:
+                raw_lines += len(f.read_text(encoding="utf-8").splitlines())
+            except OSError:
+                pass
+
+        nb_path = self.spaces.notebook_path(session_id)
+        nb_count = 0
+        if nb_path.exists():
+            nb_count = len(parse_entries(nb_path.read_text(encoding="utf-8")))
+
         dirs = self.spaces.existing_dirs()
+        embed_info = self.embedder_state
+        if self.embedder:
+            embed_info += f" | {self.embedder.provider_id} (dim={self.embedder.dim})"
+        else:
+            embed_info += " | (未加载)"
+
         yield event.plain_result(
-            "本会话日记向量: {} 块（原文 {} 个文件走 grep）\nmemory 根: {}\n会话空间: {}\nembedding: {} (dim={})\n注入文件: {}".format(
-                count,
+            "向量: {} 块\n原文: {} 文件 / {} 行 (grep)\n小本子: {} 条\n"
+            "embedding: {}\nmemory 根: {}\n会话空间: {}\n注入文件: {}".format(
+                vdb_count,
                 len(raws),
+                raw_lines,
+                nb_count,
+                embed_info,
                 self.workspace,
                 ", ".join(d[:24] for d in dirs) or "暂无",
-                self.embedder.provider_id,
-                self.embedder.dim,
                 ", ".join(map(str, self.inject_files)),
             )
         )
