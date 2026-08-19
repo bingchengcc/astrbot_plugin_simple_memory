@@ -4,7 +4,7 @@ AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力
 
 ## 特性
 
-- **小本子**：你确认的事实，每次对话自动注入，5 个工具管理增删改查
+- **小本子**：你确认的事实，每次对话自动注入，6 个工具管理增删改查 + 自动重编号 + 时间回溯备份
 - **日记**：AI 用自己人设写的一天，向量检索
 - **原文**：逐字落盘，grep 秒搜
 - **按会话隔离**：每个会话独立一套，互不串味
@@ -17,13 +17,14 @@ AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力
   └ 钩子捕获 → 原文按天落盘 + 压缩摘要检查点
 
 每天 digest_time
-  └ 结算 worker → 全量 states + 尾巴 → 人设 LLM → 日记
+  └ 结算 worker → 接力压缩(32k上限) + 补尾摘要(>2k) → 人设 LLM → 日记
+  └ 跨天压缩: 当天 states >16k 时触发，新天从摘要续写
 
 每请求（注入）
   └ system prompt += 小本子全文 + 记忆指针 + 边界说明
 
 按需（召回）
-  └ memory_search → 向量层(diary 语义) + grep 层(summary/原文/小本子)
+  └ memory_search → 向量层(diary 语义, 时间预过滤) + grep 层(纯Python, 文件分组+行号+上下文)
 ```
 
 ## 安装
@@ -72,7 +73,8 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 | `digest_session_whitelist` | | 会话白名单（UMO 片段），留空=全部启用 |
 | `diary_provider_id` | | 写日记的 LLM 提供商 ID |
 | `diary_persona_id` | | 日记人设卡 ID |
-| `tail_summary_threshold` | 2000 | 补尾摘要阈值（token） |
+| `diary_max_ctx` | 32768 | 日记生成输入上限（token），超过时从旧→新接力压缩 |
+| `tail_summary_threshold` | 2000 | 补尾摘要阈值（token），日记只写了当天早段时自动补尾 |
 | `raw_ttl_days` | 0 | 原文保留天数，0=永久。到期后有日记则只删原文，无日记则整删当天文件夹 |
 | `grep_max_files` | 20 | grep 搜索最大文件数 |
 | `grep_max_results` | 8 | grep 最大返回条数 |
@@ -84,6 +86,8 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 <workspace_path>/
 └── <会话ID冒号换下划线>/
     ├── MEMORY.md                    # 小本子
+    ├── backups/
+    │   └── MEMORY_TIMESTAMP.md      # 小本子历史版本（时间回溯）
     ├── memory/
     │   ├── YYYY-MM-DD/
     │   │   ├── raw.md               # 每日原文（grep，超32KB自动切 raw_2.md）
