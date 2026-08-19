@@ -74,7 +74,7 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 | `diary_provider_id` | | 写日记的 LLM 提供商 ID |
 | `diary_persona_id` | | 日记人设卡 ID |
 | `diary_max_ctx` | 32768 | 日记生成输入上限（token），超过时从旧→新接力压缩 |
-| `tail_summary_threshold` | 2000 | 补尾摘要阈值（token），日记只写了当天早段时自动补尾 |
+
 | `raw_ttl_days` | 0 | 原文保留天数，0=永久。到期后有日记则只删原文，无日记则整删当天文件夹 |
 | `grep_max_files` | 20 | grep 搜索最大文件数 |
 | `grep_max_results` | 8 | grep 最大返回条数 |
@@ -136,6 +136,13 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 - 首次启动会自动建空间、写 MEMORY.md 模板
 - 原文零索引成本，纯 grep；向量库只嵌 diary 块（一天几块，量极小）
 - 本地 Embedding 模型推荐小参数量（<1B），避免 KV cache 压力
+
+## FAQ
+
+- 手动修改磁盘上的 diary 文件会怎样？→ 向量库自动同步（增删改均触发重新 embed）
+- 如果我模型上下文少，日记怎么办？→ 根据设定上下文大小做续尾式多轮写日记，即第一轮部分内容写成日记，后续轮数在原有日记基础上再加入更多内容再进行日记优化。已为最低 4k 上下文用户做适配。
+- 小本子被改错了怎么恢复？→ 每次改动前自动备份到 `backups/` 目录，文件名带时间戳，可手动对比恢复。
+- 原文文件为什么会自动拆分成多个？→ 单文件超 32KB 自动开新文件（raw_2.md、raw_3.md...），防止单文件过大影响搜索性能。
 
 ## 致谢
 

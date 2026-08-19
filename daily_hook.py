@@ -97,7 +97,7 @@ def render_msg(m: dict, tool_cap: int = TOOL_RESULT_CAP) -> str:
     return f"{role}: " + _indent(content)
 
 
-class ContextDiffer:
+class ContextCapture:
     """on_llm_response：DB 全量读取 + count 推进，新增消息原文落当日 md。"""
 
     def __init__(

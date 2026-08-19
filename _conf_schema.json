@@ -11,11 +11,17 @@
     "description": "记忆文件根目录",
     "hint": "每个会话在这里各建一个独立文件夹（文件夹名=会话统一 ID，冒号换下划线），里面是小本子 MEMORY.md、日记 memory/、向量库 chroma/，互不干扰。memory 根下也可以放共享 .md（如 SOUL.md，列入 inject_files 即注入所有会话）。相对路径基于插件 data 目录解析，留空等同 memory。"
   },
+  "use_embedding": {
+    "type": "bool",
+    "default": true,
+    "description": "启用向量检索",
+    "hint": "关闭后只保留原文 grep + 小本子 + 日记，不需要 Embedding 提供商。"
+  },
   "embedding_provider_id": {
     "type": "string",
     "default": "",
     "description": "Embedding 提供商 ID",
-    "hint": "AstrBot WebUI 提供商管理中 Embedding 类型提供商的 ID，必填；未配置时插件不启动检索。"
+    "hint": "AstrBot WebUI 提供商管理中 Embedding 类型提供商的 ID；未配置或 use_embedding=false 时不启用向量检索。"
   },
   "chunk_size": {
     "type": "int",
@@ -117,12 +123,7 @@
     "hint": "点右侧按钮从人设管理里选，其 system_prompt 会作为日记的角色卡；留空用通用日记口吻。",
     "_special": "select_persona"
   },
-  "tail_summary_threshold": {
-    "type": "int",
-    "default": 2000,
-    "description": "补尾摘要阈值 (token)",
-    "hint": "补尾原文超过该 token 数时先摘要再进日记输入，否则直接给原文。"
-  },
+  
   "raw_ttl_days": {
     "type": "int",
     "default": 0,
@@ -136,16 +137,41 @@
     "description": "grep 检索最大文件数",
     "hint": "grep 搜索时最多扫描多少个 raw 文件（按最新优先）。调大可搜更多历史，但响应变慢。"
   },
+  
+  "vector_max_results": {
+    "type": "int",
+    "default": 2,
+    "description": "向量检索最大返回条数",
+    "hint": "diary 语义搜索单次最多返回多少条结果。"
+  },
   "grep_max_results": {
     "type": "int",
-    "default": 8,
+    "default": 5,
     "description": "grep 最大返回条数",
     "hint": "grep 搜索单次最多返回多少条匹配结果。"
   },
-  "vector_max_results": {
+  "search_max_tokens": {
     "type": "int",
-    "default": 5,
-    "description": "向量检索最大返回条数",
-    "hint": "diary 语义搜索单次最多返回多少条结果。"
+    "default": 500,
+    "description": "搜索结果token上限",
+    "hint": "单次搜索结果合并后的最大token数，超出截断并标注。中文约1字=1token。0=不限。"
+  },
+  "diary_max_ctx": {
+    "type": "int",
+    "default": 32768,
+    "description": "日记生成输入上限 (token)",
+    "hint": "模型上下文窗口大小，超过时分多轮续写。不建议低于 4096。"
+  },
+  "auto_compress_notebook": {
+    "type": "bool",
+    "default": false,
+    "description": "小本子超限时自动压缩旧条目",
+    "hint": "不建议开启。开启后小本子注入 system prompt 超限时，自动用 LLM 把最旧 5 条合并为 1 条摘要。与日记供应商相同。"
+  },
+  "auto_compress_threshold": {
+    "type": "int",
+    "default": 2000,
+    "description": "小本子自动压缩触发阈值（token）",
+    "hint": "小本子注入 system prompt 的 token 估算超过此值时触发压缩。中文约1字=1token。"
   }
 }

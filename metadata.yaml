@@ -3,7 +3,7 @@ display_name: 轻量记忆
 desc: AI 有自己的小本子、日记和翻旧账能力，零外部依赖
 short_desc: 轻量记忆，小本子+日记+原文
 author: 冰城cc
-version: 0.2.2
+version: 0.2.3
 repo: https://github.com/bingchengcc/astrbot_plugin_simple_memory
 social_link: https://github.com/bingchengcc
 astrbot_version: ">=4.5.1,<5"

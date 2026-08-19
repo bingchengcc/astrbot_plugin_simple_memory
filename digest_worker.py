@@ -66,6 +66,13 @@ def session_to_db_user_id(session_id: str) -> str:
     return f"{parts[0]}:{parts[1]}:{'!'.join(parts[2:])}"
 
 
+def calc_output_reserve(ctx: int) -> int:
+    """S11: 输出预留——>=20000 固定 2000，<20000 线性适配（4096→500, 20000→2000）"""
+    if ctx >= 20000:
+        return 2000
+    return max(500, int(500 + (ctx - 4096) * 1500 / 15904))
+
+
 class DigestWorker:
     """每日总结 worker：补尾 + 日记（摘要用完即焚）。
 
@@ -364,19 +371,7 @@ class DigestWorker:
                 ]
 
             if tail_text:
-                if count_tokens(tail_text) > self.tail_summary_threshold:
-                    tail_sum = await self._llm(
-                        TAIL_SUMMARY_RULES,
-                        tail_text[: self.tail_summary_threshold * 4],
-                    )
-                    if tail_sum:
-                        input_parts.append(f"[补尾摘要]\n{tail_sum}")
-                    else:
-                        input_parts.append(
-                            f"[今日尾部原文]\n{tail_text[:TAIL_RAW_CAP]}"
-                        )
-                else:
-                    input_parts.append(f"[今日尾部原文]\n{tail_text[:TAIL_RAW_CAP]}")
+                input_parts.append(f"[今日尾部原文]\n{tail_text[:TAIL_RAW_CAP]}")
 
             prev_diaries = self._previous_diaries(sid, day_str, days=2)
             if prev_diaries:
@@ -436,7 +431,7 @@ class DigestWorker:
         # 固定部分（tail + prev_diaries + system）
         fixed_parts = [p for p in input_parts if not p.startswith("[摘要检查点")]
         fixed_tokens = sum(count_tokens(p) for p in fixed_parts) + count_tokens(system_prompt)
-        budget = self.diary_max_ctx - fixed_tokens - 2000  # 留 2000 给输出
+        budget = self.diary_max_ctx - fixed_tokens - calc_output_reserve(self.diary_max_ctx)
         # 分批 states
         batches: list[str] = []
         current = ""

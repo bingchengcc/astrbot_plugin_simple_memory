@@ -103,11 +103,7 @@ class SpaceManager:
         d = self.path(session_id) / "memory" / "diary"
         if not d.is_dir():
             return []
-        files = []
-        for sub in d.iterdir():
-            if sub.is_dir():
-                files.extend(sorted(sub.glob("raw*.md")))
-        return files
+        return sorted(d.glob("*.md"))
 
     def notebook_path(self, session_id: str) -> Path:
         return self.path(session_id) / NOTEBOOK_NAME

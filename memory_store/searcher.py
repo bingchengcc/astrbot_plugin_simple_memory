@@ -22,18 +22,21 @@ class Searcher:
         query: str,
         source: str = "all",
         time_range: str = "",
+        date: str = "",
         top_k: int = 5,
     ) -> list[SearchHit]:
         if not query.strip():
             return []
         q_emb = await self.embedder.embed([query])
-        # Build where clause: source + time_range as metadata filter (not post-filter)
+        # Build where clause: source + time_range + date as metadata filter (not post-filter)
         where_clauses: list[dict] = []
         if source in ("simple_memory", "astrbot"):
             where_clauses.append({"source": {"$eq": source}})
         cutoff = self._parse_range(time_range)
         if cutoff:
             where_clauses.append({"timestamp": {"$gte": cutoff}})
+        if date and date != "all":
+            where_clauses.append({"file": {"$contains": date}})
         where = {"$and": where_clauses} if len(where_clauses) > 1 else (where_clauses[0] if where_clauses else None)
         raw = self.vdb.query(q_emb[0], n=top_k * 3, where=where)
 

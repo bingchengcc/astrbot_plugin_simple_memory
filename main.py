@@ -16,7 +16,7 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.star.filter.command import GreedyStr
 
 from .digest_worker import DigestWorker
-from .daily_hook import ContextDiffer
+from .daily_hook import ContextCapture
 from .daily_md import DEFAULT_DIGEST_TIME, cycle_file_date
 from .notebook import append_text, delete_text, edit_text, find_dup_num, parse_entries, renumber_text
 from .memory_store.chunker import Chunker
@@ -103,7 +103,7 @@ class SimpleMemory(Star):
         self.digest_state_budget: int = int(
             cfg.get("digest_state_budget") or 24000
         )
-        self.differ: ContextDiffer | None = None
+        self.differ: ContextCapture | None = None
         self.digest_worker: DigestWorker | None = None
 
     async def initialize(self) -> None:
@@ -129,7 +129,7 @@ class SimpleMemory(Star):
         if self.digest_enabled:
             self._inject_compress_instruction()
 
-            self.differ = ContextDiffer(
+            self.differ = ContextCapture(
                 store=SessionStore(StarTools.get_data_dir() / "session_store.json"),
                 daily_file_for=self.spaces.daily_file,
                 lock=self._daily_lock,
@@ -146,18 +146,22 @@ class SimpleMemory(Star):
                 digest_time=str(self.cfg.get("digest_time") or DEFAULT_DIGEST_TIME),
                 diary_provider_id=str(self.cfg.get("diary_provider_id") or ""),
                 diary_persona_id=str(self.cfg.get("diary_persona_id") or ""),
-                tail_summary_threshold=int(
-                    self.cfg.get("tail_summary_threshold") or 2000
-                ),
+                
                 raw_ttl_days=int(self.cfg.get("raw_ttl_days") or 0),
                 session_whitelist=self.cfg.get("digest_session_whitelist") or [],
                 think_cap=self.capture_think,
                 tool_cap=self.capture_tool,
                 state_budget=self.digest_state_budget,
+                diary_max_ctx=max(4096, int(self.cfg.get("diary_max_ctx") or 32768)),
             )
             self.digest_worker.start()
 
+        use_embedding = bool(self.cfg.get("use_embedding", True))
         provider_id = str(self.cfg.get("embedding_provider_id") or "")
+        if not use_embedding:
+            logger.info("simple_memory: use_embedding=false，跳过向量检索（纯 grep 模式）")
+            _dbg("initialize() done (no embedding)")
+            return
         if not provider_id:
             logger.warning(
                 "simple_memory: 未配置 embedding_provider_id（需在 AstrBot WebUI 提供商管理中配置 Embedding 类型提供商）"
@@ -180,9 +184,15 @@ class SimpleMemory(Star):
         )
         self.watcher.start()
 
-        logger.info(
-            f"simple_memory 启动完成，会话空间 {len(self.spaces.existing_dirs())} 个"
-        )
+        n_dirs = len(self.spaces.existing_dirs())
+        if self.embedder:
+            logger.info(
+                f"simple_memory 启动完成，会话空间 {n_dirs} 个，向量检索已启用"
+            )
+        else:
+            logger.info(
+                f"simple_memory 启动完成，会话空间 {n_dirs} 个，纯 grep 模式（未启用向量检索）"
+            )
         _dbg(f"initialize() done workspace={self.workspace}")
 
     async def _deferred_embedder_load(self) -> None:
@@ -241,7 +251,7 @@ class SimpleMemory(Star):
             "name": "astrbot_plugin_simple_memory",
             "author": "冰城cc",
             "description": "三层记忆：向量检索 + system prompt 注入 + 每日日记 + 共同小本子",
-            "version": "0.2.2",
+            "version": "0.2.3",
         }
 
     def _vdb_for(self, session_id: str):
@@ -313,25 +323,25 @@ class SimpleMemory(Star):
         except OSError:
             vdb.delete_file(rel)
             logger.info(f"simple_memory 索引时文件已消失: {rel}")
-            return
+            return False
         vdb.delete_file(rel)
         if not text.strip():
-            return
+            return False
         chunks = self.chunker.split(text, self.embedder.count_tokens)
         if not chunks:
-            return
+            return False
         embs = await self.embedder.embed(chunks)
         if not path.is_file():
             logger.info(f"simple_memory embedding 期间文件被删: {rel}")
-            return
+            return False
         try:
             recheck = mf.read(path)
         except OSError:
             logger.info(f"simple_memory embedding 后文件被删: {rel}")
-            return
+            return False
         if hashlib.sha256(recheck.encode("utf-8")).hexdigest() != hashlib.sha256(text.encode("utf-8")).hexdigest():
             logger.info(f"simple_memory embedding 期间文件已变，丢弃本次索引: {rel}")
-            return
+            return False
         file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         # 从文件路径提取日记日期作为 timestamp（而非索引时间）
         ts_m = re.search(r"(\d{4}-\d{2}-\d{2})", rel)
@@ -391,6 +401,60 @@ class SimpleMemory(Star):
             "只问稳定事实，不问即时状态（今天日程、临时心情）。\n"
             "查看用 memory_read，改单条用 memory_edit，删单条用 memory_delete，整篇重写用 memory_write（逃生门，慎用）。"
         )
+
+    async def _maybe_compress_notebook(self, session_id: str) -> None:
+        """S10: 小本子超限时自动压缩最旧5条为1条摘要（后台执行）"""
+        if not self.cfg.get("auto_compress_notebook", False):
+            return
+        p = self.spaces.notebook_path(session_id)
+        if not p.is_file():
+            return
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            from .digest_worker import count_tokens
+            threshold = int(self.cfg.get("auto_compress_threshold") or 2000)
+            if count_tokens(text) < threshold:
+                return
+            entries = parse_entries(text)
+            if len(entries) < 8:
+                return
+            # 取最旧5条
+            oldest = entries[:5]
+            oldest_text = "\n".join(f"{e['num']}. [{e['ts']}] {e['content']}" for e in oldest)
+            # 用LLM压缩
+            provider_id = str(self.cfg.get("diary_provider_id") or "")
+            prompt = f"把以下记忆条目合并压缩为1条（保持关键信息）：\n{oldest_text}"
+            if provider_id:
+                resp = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=prompt,
+                )
+            else:
+                prov = await self.context.get_using_provider_async()
+                if prov is None:
+                    return
+                main_id = str(prov.provider_config.get("id", ""))
+                resp = await self.context.llm_generate(
+                    chat_provider_id=main_id,
+                    prompt=prompt,
+                )
+            summary = (resp.completion_text or "").strip()
+            if not summary:
+                return
+            # 替换最旧5条为1条摘要
+            from .notebook import append_text, renumber_text
+            remaining = "\n".join(f"{e['num']}. [{e['ts']}] {e['content']}" for e in entries[5:])
+            ts = time.strftime("%Y-%m-%d %H:%M")
+            compressed = append_text("", f"[自动压缩] {summary}", ts)[0]
+            if remaining.strip():
+                compressed = compressed.rstrip() + "\n" + remaining
+            compressed = renumber_text(compressed)
+            self._notebook_bak(p)
+            p.write_text(compressed, encoding="utf-8")
+            self._invalidate_session_cache(session_id)
+            logger.info(f"simple_memory 小本子自动压缩: {len(entries)}→{len(entries)-4} 条")
+        except Exception as e:
+            logger.warning(f"simple_memory 小本子自动压缩失败: {e}")
 
     def _build_inject(self, session_id: str) -> str:
         parts: list[str] = []
@@ -556,6 +620,7 @@ class SimpleMemory(Star):
         cache_key = f"{session_id}:{cycle_file_date(datetime.now(), self.spaces.digest_time)}"
         text = self._inject_cache.get(cache_key)
         if text is None:
+            asyncio.ensure_future(self._maybe_compress_notebook(session_id))
             text = self._build_inject(session_id)
             if not text:
                 return
@@ -630,13 +695,13 @@ class SimpleMemory(Star):
         time_range: str = "",
         date: str = "",
     ) -> str:
-        """搜索记忆库。diary模式走向量语义检索（用自然语言描述即可），raw模式走关键词匹配（单个关键词最佳），all并行两者。遇到回忆类问题（"上次/之前/你记得吗/有一次"）必须搜索，不许凭印象编。
+        """先搜再答——只要用户提到过去发生的事、说过的话、做过的决定、玩过的游戏、讨论过的内容，必须调用此工具搜索后再回答，不许凭印象编。diary模式走向量语义检索（自然语言即可），raw模式走关键词匹配（空格分隔多关键词，OR匹配按命中数排序），all并行两者。未找到时raw层可能是关键词不匹配，换个词或更宽泛的表述再试。
 
         Args:
-            query(string): diary用自然语言描述，raw用单个关键词
-            source(string): all=日记向量+原文关键词（默认），diary=只查日记向量，raw=只查原文关键词
-            time_range(string): 时间范围，如 7d=最近7天、24h=最近24小时，留空不限
-            date(string): 具体日期(YYYY-MM-DD)或 "all"，锁定某天文件夹
+            query(string): 搜索内容。diary/all模式用自然语言描述，raw模式用关键词（多关键词空格分隔，如"天气 瑞安"）
+            source(string): all=日记+原文（默认），diary=只查日记，raw=只查原文，latest=最近消息（按时间返回）
+            time_range(string): 模糊时间范围，如 7d=最近7天、24h=最近24小时，留空不限。与date二选一，同时填时date优先
+            date(string): 精确锁定某天(YYYY-MM-DD)、某月(YYYY-MM)或 "all"。与time_range二选一，同时填时date优先
         """
         session_id = str(event.unified_msg_origin)
         if not self.spaces.is_active(session_id):
@@ -644,25 +709,44 @@ class SimpleMemory(Star):
         src = (source or "all").strip().lower()
         if src in ("simple_memory", "astrbot"):
             src = "all"
-        if src not in ("all", "diary", "raw"):
+        if src not in ("all", "diary", "raw", "latest"):
             src = "all"
-        # raw 搜索不依赖 embedder
-        need_embedder = src in ("all", "diary")
-        if need_embedder:
+        # date优先：date有值时清除time_range
+        if date and date.strip().lower() != "all":
+            time_range = ""
+
+        # S9: source=latest - 返回最近消息
+        if src == "latest":
+            date_filter = (date or "").strip().lower()
+            parts = self._grep_search(session_id, query, time_range, date_filter)
+            if not parts:
+                parts = self._latest_messages(session_id, time_range)
+            if not parts:
+                return "未找到相关记忆"
+            return self._apply_search_limits("\n---\n".join(parts))
+
+        # S8: 无 embedder 时 diary 层降级为日记文件 grep
+        if src in ("all", "diary"):
             t = self._embedder_task
             if t is not None and not t.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(t), timeout=65)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
-            if not self.embedder:
-                return "记忆库未初始化"
+            if not self.embedder and src == "diary":
+                date_filter = (date or "").strip().lower()
+                parts = self._grep_diary(session_id, query, time_range, date_filter)
+                if not parts:
+                    return "未找到相关记忆"
+                return self._apply_search_limits("\n---\n".join(parts))
+
         parts: list[str] = []
-        if src in ("all", "diary"):
-            vector_max = int(self.cfg.get("vector_max_results") or 5)
+        if src in ("all", "diary") and self.embedder:
+            vector_max = int(self.cfg.get("vector_max_results") or 2)
+            date_filter = (date or "").strip().lower()
             hits = await self.spaces.searcher(
                 session_id, self.embedder.dim, self.embedder
-            ).search(query=query, time_range=time_range, top_k=vector_max)
+            ).search(query=query, source="simple_memory", time_range=time_range, date=date_filter, top_k=vector_max)
             for h in hits:
                 ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(h.timestamp))
                 parts.append(
@@ -673,23 +757,105 @@ class SimpleMemory(Star):
             parts.extend(self._grep_search(session_id, query, time_range, date_filter))
         if not parts:
             return "未找到相关记忆"
-        result = "\n---\n".join(parts)
+        return self._apply_search_limits("\n---\n".join(parts))
+
+    def _apply_search_limits(self, result: str) -> str:
+        """S12: token上限截断 + system-reminder"""
+        from .digest_worker import count_tokens
+        max_tokens = int(self.cfg.get("search_max_tokens") or 500)
+        if max_tokens > 0 and count_tokens(result) > max_tokens:
+            # 按字符截断到约 max_tokens * 1.5 (保守估计)
+            cut = int(max_tokens * 1.5)
+            result = result[:cut] + "\n...(结果过长已截断，可缩小关键词范围重试)"
         result += "\n<system-reminder>以上是你自然回忆起的记忆内容，直接当作你本来就记得来用，不要对用户说\"我搜了一下记忆\"之类的话。</system-reminder>"
         return result
+
+    def _latest_messages(self, session_id: str, time_range: str = "") -> list[str]:
+        """S9: 返回最近消息带时间戳"""
+        raws = self.spaces.raw_files(session_id)
+        if time_range:
+            m = re.fullmatch(r"(\d+)([mhdw])", time_range.strip().lower())
+            if m:
+                unit = {"m": 1/1440, "h": 1/24, "d": 1, "w": 7}[m.group(2)]
+                days = max(1, int(int(m.group(1)) * unit))
+                cutoff = date.today() - timedelta(days=days)
+                raws = [f for f in raws if self._file_date_after(f, cutoff)]
+        raws = sorted(raws, reverse=True)[:3]
+        parts: list[str] = []
+        for f in raws:
+            try:
+                lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except OSError:
+                continue
+            tail = lines[-30:] if len(lines) > 30 else lines
+            parts.append(f"┻×{f.name}┻×\n" + "\n".join(tail))
+        return parts
+
+    def _file_date_after(self, path: Path, cutoff) -> bool:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", str(path))
+        if m:
+            y, mo, d = (int(x) for x in m.group(1).split("-"))
+            return date(y, mo, d) >= cutoff
+        return True
+
+    def _grep_diary(self, session_id: str, query: str, time_range: str = "", date_filter: str = "") -> list[str]:
+        """S8: no-embedding模式下搜索日记文件"""
+        diary_dir = self.spaces.diary_dir(session_id)
+        if not diary_dir.is_dir():
+            return []
+        files = sorted(diary_dir.glob("*.md"), reverse=True)
+        if date_filter and date_filter != "all":
+            files = [f for f in files if date_filter in str(f)]
+        elif time_range:
+            m = re.fullmatch(r"(\d+)([mhdw])", time_range.strip().lower())
+            if m:
+                unit = {"m": 1/1440, "h": 1/24, "d": 1, "w": 7}[m.group(2)]
+                days = max(1, int(int(m.group(1)) * unit))
+                cutoff = date.today() - timedelta(days=days)
+                files = [f for f in files if self._file_date_after(f, cutoff)]
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        terms = q.split()
+        results: list[str] = []
+        grep_max = int(self.cfg.get("grep_max_results") or 5)
+        for f in files[:10]:
+            try:
+                lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except OSError:
+                continue
+            hits_in_file: list[str] = []
+            for i, line in enumerate(lines):
+                low = line.lower()
+                hit_count = sum(1 for t in terms if t in low)
+                if hit_count == 0:
+                    continue
+                start = max(0, i - 1)
+                end = min(len(lines), i + 3)
+                block_lines = []
+                for j in range(start, end):
+                    marker = ">" if j == i else " "
+                    block_lines.append(f"{marker} {j + 1}: {lines[j]}")
+                hits_in_file.append("\n".join(block_lines))
+                if len(hits_in_file) >= 3:
+                    break
+            if hits_in_file:
+                results.append(f"┻×{f.name}┻×\n" + "\n".join(hits_in_file))
+                if len(results) >= grep_max:
+                    break
+        return results
 
     def _grep_search(
         self, session_id: str, query: str, time_range: str = "", date_filter: str = ""
     ) -> list[str]:
-        """code_search 风格纯 Python 搜索：关键词匹配 + 上下文 + 文件分组。"""
+        """S7+S14: OR匹配 + 命中数排序 + 自适应上下文。"""
         q = (query or "").strip().lower()
         if not q:
             return []
         terms = q.split()
         grep_max_files = int(self.cfg.get("grep_max_files") or 20)
-        grep_max_results = int(self.cfg.get("grep_max_results") or 8)
+        grep_max_results = int(self.cfg.get("grep_max_results") or 5)
         per_file_cap = 4
-        ctx_before = 1
-        ctx_after = 2
 
         # 收集候选文件
         cands: list[Path] = []
@@ -744,15 +910,14 @@ class SimpleMemory(Star):
                 raws = kept2
         cands.extend(raws[:grep_max_files])
 
-        # 逐文件搜索
-        out: list[str] = []
+        # 逐文件搜索 (S7: OR匹配 + 文件按最高命中排, 文件内按命中数排)
+        file_groups: list[tuple[int, str, list[tuple[int, str]]]] = []  # (max_hit, filename, [(hit, block), ...])
         total_hits = 0
         for f in cands:
             try:
                 raw_bytes = f.read_bytes()
             except OSError:
                 continue
-            # 二进制检测
             if b"\x00" in raw_bytes[:8192]:
                 continue
             try:
@@ -762,33 +927,51 @@ class SimpleMemory(Star):
             if not lines:
                 continue
 
-            file_results: list[str] = []
+            file_results: list[tuple[int, str]] = []
             for i, line in enumerate(lines):
                 low = line.lower()
-                if len(terms) > 1:
-                    ok = all(t in low for t in terms)
-                else:
-                    ok = terms[0] in low
-                if not ok:
+                # S7: OR匹配 - 任一关键词命中即可
+                hit_count = sum(1 for t in terms if t in low)
+                if hit_count == 0:
                     continue
-                # 收集上下文
-                block_lines: list[str] = []
+                # S14: 自适应上下文
+                ctx_before = 1
+                ctx_after = 2
+                if i == 0 or (i > 0 and lines[i-1].strip() == ""):
+                    ctx_after = min(4, len(lines) - i - 1)
+                if i == len(lines)-1 or (i < len(lines)-1 and lines[i+1].strip() == ""):
+                    ctx_before = min(3, i)
                 start = max(0, i - ctx_before)
-                for j in range(start, min(len(lines), i + 1 + ctx_after)):
+                end = min(len(lines), i + 1 + ctx_after)
+                block_lines = []
+                for j in range(start, end):
                     marker = ">" if j == i else " "
                     block_lines.append(f"{marker} {j + 1}: {lines[j]}")
-                file_results.append("\n".join(block_lines))
+                file_results.append((hit_count, "\n".join(block_lines)))
                 if len(file_results) >= per_file_cap:
                     break
 
             if file_results:
-                out.append(f"\u2500\u00d7{f.name}\u2500\u00d7\n" + "\n".join(file_results))
+                # S7: 文件内按命中数排序
+                file_results.sort(key=lambda x: -x[0])
+                max_hit = file_results[0][0]
+                file_groups.append((max_hit, f.name, file_results))
                 total_hits += len(file_results)
             if total_hits >= grep_max_results:
                 break
 
+        # 文件按最高命中数排序
+        file_groups.sort(key=lambda x: -x[0])
+        out: list[str] = []
+        for _, fname, results in file_groups:
+            out.append(f"\u2500\u00d7{fname}\u2500\u00d7")
+            for _, block in results:
+                out.append(block)
+                if len(out) >= grep_max_results + 1:
+                    break
+            if len(out) >= grep_max_results + 1:
+                break
         return out
-
 
     def _notebook_path(self, event: AstrMessageEvent) -> Path:
         session_id = str(event.unified_msg_origin)
@@ -960,11 +1143,12 @@ class SimpleMemory(Star):
 
         yield event.plain_result(
             "向量: {} 块\n原文: {} 文件 / {} 行 (grep)\n小本子: {} 条\n"
-            "embedding: {}\nmemory 根: {}\n会话空间: {}\n注入文件: {}".format(
+            "搜索模式: {}\nembedding: {}\nmemory 根: {}\n会话空间: {}\n注入文件: {}".format(
                 vdb_count,
                 len(raws),
                 raw_lines,
                 nb_count,
+                "grep+向量" if self.embedder else "纯grep",
                 embed_info,
                 self.workspace,
                 ", ".join(d[:24] for d in dirs) or "暂无",
@@ -994,6 +1178,42 @@ class SimpleMemory(Star):
         yield event.plain_result("开始手动总结...")
         await self.digest_worker.digest()
         yield event.plain_result("总结完成")
+
+    @mem_group.command("diary", priority=10)
+    async def mem_diary(self, event: AstrMessageEvent, arg: GreedyStr = GreedyStr) -> None:
+        """查看日记。不带参数=当天，带日期=指定日期（yyyy-mm-dd），"month"=本月全部。"""
+        _dbg(f"mem diary hit arg={arg!r}")
+        if not self.spaces:
+            yield event.plain_result("记忆插件未启动")
+            return
+        session_id = str(event.unified_msg_origin)
+        diary_dir = self.spaces.diary_dir(session_id)
+        if not diary_dir.is_dir():
+            yield event.plain_result("还没有日记")
+            return
+        a = (arg or "").strip()
+        files: list[Path] = []
+        if not a or a == "today":
+            day = cycle_file_date(datetime.now(), self.spaces.digest_time)
+            files = list(diary_dir.glob(f"{day}.md"))
+        elif a == "month":
+            month = datetime.now().strftime("%Y-%m")
+            files = sorted(diary_dir.glob(f"{month}-*.md"), reverse=True)
+        else:
+            files = list(diary_dir.glob(f"{a}.md"))
+            if not files:
+                files = sorted(diary_dir.glob(f"{a}-*.md"), reverse=True)[:31]
+        if not files:
+            yield event.plain_result(f"未找到日记: {a or '当天'}")
+            return
+        total_chars = sum(f.stat().st_size for f in files)
+        if total_chars > 20000:
+            files = files[:7]
+            yield event.plain_result(f"本月日记较长，只显示最近 7 篇（共 {len(files)} 篇）")
+        for f in files:
+            text = f.read_text(encoding="utf-8", errors="ignore").strip()
+            if text:
+                yield event.plain_result(f"📅 {f.stem}\n{text[:3000]}")
 
     @mem_group.command("test", priority=10)
     async def mem_test(
