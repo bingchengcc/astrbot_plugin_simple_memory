@@ -272,9 +272,9 @@ class SimpleMemory(Star):
                     if not force and self._file_hash_unchanged(vdb, rel, f):
                         unchanged += 1
                         continue
-                    await self._index_file(f, dir_name)
-                    self._record_indexed(key, f)
-                    reindexed += 1
+                    if await self._index_file(f, dir_name):
+                        self._record_indexed(key, f)
+                        reindexed += 1
                 except Exception:
                     logger.exception(
                         f"simple_memory 索引文件失败（跳过，其余继续）: {key}"
@@ -300,11 +300,11 @@ class SimpleMemory(Star):
             return False
         return hashlib.sha256(text.encode("utf-8")).hexdigest() == stored
 
-    async def _index_file(self, path: Path, dir_name: str) -> None:
+    async def _index_file(self, path: Path, dir_name: str) -> bool:
         async with self._index_lock:
-            await self._index_file_locked(path, dir_name)
+            return await self._index_file_locked(path, dir_name)
 
-    async def _index_file_locked(self, path: Path, dir_name: str) -> None:
+    async def _index_file_locked(self, path: Path, dir_name: str) -> bool:
         vdb = self._vdb_for(dir_name)
         mf = self.spaces.files(dir_name)
         rel = mf.rel(path)
@@ -332,8 +332,13 @@ class SimpleMemory(Star):
         if hashlib.sha256(recheck.encode("utf-8")).hexdigest() != hashlib.sha256(text.encode("utf-8")).hexdigest():
             logger.info(f"simple_memory embedding 期间文件已变，丢弃本次索引: {rel}")
             return
-        now = int(time.time())
         file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # 从文件路径提取日记日期作为 timestamp（而非索引时间）
+        ts_m = re.search(r"(\d{4}-\d{2}-\d{2})", rel)
+        if ts_m:
+            diary_ts = int(datetime.strptime(ts_m.group(1), "%Y-%m-%d").replace(hour=21, minute=45).timestamp())
+        else:
+            diary_ts = int(time.time())
         vdb.upsert(
             ids=[vdb.chunk_id(rel, i) for i in range(len(chunks))],
             embeddings=embs,
@@ -342,7 +347,7 @@ class SimpleMemory(Star):
                 {
                     "file": rel,
                     "source": "simple_memory",
-                    "timestamp": now,
+                    "timestamp": diary_ts,
                     "file_hash": file_hash,
                 }
                 for _ in chunks
@@ -351,6 +356,7 @@ class SimpleMemory(Star):
         logger.info(
             f"simple_memory 已索引 {self._state_key(dir_name, rel)}，{len(chunks)} 块"
         )
+        return True
 
     def _pointer_block(self, session_id: str) -> str:
         if not self.digest_enabled:
@@ -509,9 +515,9 @@ class SimpleMemory(Star):
         key = self._state_key(dir_name, rel)
         if not self._should_reindex_file(path, key):
             return
-        await self._index_file(path, dir_name)
-        self._record_indexed(key, path)
-        logger.info(f"simple_memory 增量重建索引: {key}")
+        if await self._index_file(path, dir_name):
+            self._record_indexed(key, path)
+            logger.info(f"simple_memory 增量重建索引: {key}")
 
     async def _on_md_deleted(self, path: Path) -> None:
         if not self.embedder:

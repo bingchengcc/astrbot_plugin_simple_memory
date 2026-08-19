@@ -27,10 +27,16 @@ class Searcher:
         if not query.strip():
             return []
         q_emb = await self.embedder.embed([query])
-        where = {"source": source} if source in ("simple_memory", "astrbot") else None
+        # Build where clause: source + time_range as metadata filter (not post-filter)
+        where_clauses: list[dict] = []
+        if source in ("simple_memory", "astrbot"):
+            where_clauses.append({"source": {"$eq": source}})
+        cutoff = self._parse_range(time_range)
+        if cutoff:
+            where_clauses.append({"timestamp": {"$gte": cutoff}})
+        where = {"$and": where_clauses} if len(where_clauses) > 1 else (where_clauses[0] if where_clauses else None)
         raw = self.vdb.query(q_emb[0], n=top_k * 3, where=where)
 
-        cutoff = self._parse_range(time_range)
         hits: list[SearchHit] = []
         seen: set[str] = set()
         docs = raw.get("documents", [[]])[0]
@@ -39,8 +45,6 @@ class Searcher:
         for i, doc in enumerate(docs):
             meta = (metas[i] or {}) if i < len(metas) else {}
             ts = int(meta.get("timestamp", 0) or 0)
-            if cutoff and ts < cutoff:
-                continue
             file_key = str(meta.get("file", ""))
             dedup_key = f"{file_key}#{doc[:64]}"
             if dedup_key in seen:
