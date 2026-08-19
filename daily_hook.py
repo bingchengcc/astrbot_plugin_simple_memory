@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import re
 import time
@@ -14,7 +13,6 @@ ACK_TEXT = "Acknowledged the summary of our previous conversation history."
 TOOL_RESULT_CAP = 2000
 RAW_CONTENT_CAP = 20000
 THINK_CAP = 300
-FPS_PREFIX = "<" + "!-- fps: "
 
 
 def _clean_think_tags(text: str) -> str:
@@ -57,36 +55,11 @@ def _norm_content(content: Any, think_cap: int = THINK_CAP) -> str:
         return str(content)
 
 
-def _fp(role: str, content: str, tool_calls: Any, index: int = 0) -> str:
-    raw = (
-        f"{index}\u0001{role}\u0001{content}\u0001"
-        f"{json.dumps(tool_calls or [], ensure_ascii=False, sort_keys=True)}"
-    )
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
-
-
-_FP_COMMENT_RE = __import__("re").compile(__import__("re").escape(FPS_PREFIX) + r"([0-9a-f ]+) -->")
-
-
-def _load_seen_fps(path: Path) -> set:
-    """读当日文件里已落盘消息的 fp 集合（块尾 fps 注释）。"""
-    if not path.is_file():
-        return set()
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return set()
-    seen: set = set()
-    for m in _FP_COMMENT_RE.finditer(text):
-        seen.update(m.group(1).split())
-    return seen
-
-
 def normalize(
     contexts: list[dict], think_cap: int = THINK_CAP
 ) -> list[dict]:
     out = []
-    for idx, m in enumerate(contexts or []):
+    for m in contexts or []:
         role = str(m.get("role") or "")
         content = _norm_content(m.get("content"), think_cap)
         tool_calls = m.get("tool_calls")
@@ -96,7 +69,6 @@ def normalize(
                 "content": content,
                 "name": m.get("name"),
                 "tool_calls": tool_calls,
-                "fp": _fp(role, content, tool_calls, idx),
             }
         )
     return out
@@ -183,22 +155,17 @@ class ContextDiffer:
         if count == 0:
             await self.store.update(
                 session_id,
-                snapshot={"count": len(msgs), "last_fp": msgs[-1]["fp"]},
+                snapshot={"count": len(msgs)},
             )
             return
-        if (
-            len(msgs) == count
-            and msgs[-1]["fp"] == (snap.get("last_fp") or "")
-        ):
+        if len(msgs) == count:
             return
 
-        if len(msgs) > count:
-            new = msgs[count:]
+        if len(msgs) < count:
+            # context 被重置（窗口滑动），全部视为新消息
+            new = msgs
         else:
-            seen = _load_seen_fps(
-                self.daily_file_for(session_id).path_for(datetime.now())
-            )
-            new = [m for m in msgs if m["fp"] not in seen]
+            new = msgs[count:]
 
         summary = None
         raw: list[dict] = []
@@ -212,37 +179,18 @@ class ContextDiffer:
             if role == "assistant" and content.strip() == ACK_TEXT:
                 continue
             raw.append(m)
-        if summary is None and msgs:
-            first = msgs[0]
-            if first.get("role") == "user":
-                fc = first.get("content") or ""
-                if isinstance(fc, str) and fc.startswith(SUMMARY_PREFIX):
-                    cand = fc[len(SUMMARY_PREFIX):].strip()
-                    states = entry.get("summary_states") or []
-                    if not states or states[-1]["text"] != cand:
-                        summary = cand
-
         if raw:
             async with self.lock:
                 path = self.daily_file_for(session_id).path_for(datetime.now())
-                seen = _load_seen_fps(path)
-                fresh = raw if not seen else [m for m in raw if m["fp"] not in seen]
-                skipped = len(raw) - len(fresh)
-                pairs = [(m["fp"], self._render(m)) for m in fresh]
-                pairs = [(fp, s) for fp, s in pairs if s]
-                if pairs:
+                rendered = [self._render(m) for m in raw]
+                rendered = [s for s in rendered if s]
+                if rendered:
                     lines = [f"## [{session_id[:24]}]"]
-                    lines.extend(s for _, s in pairs)
-                    lines.append(FPS_PREFIX + " ".join(fp for fp, _ in pairs) + " -->")
+                    lines.extend(rendered)
                     self.daily_file_for(session_id).append_to(path, "\n".join(lines))
                     logger.info(
                         f"simple_memory 原文落盘 {session_id[:16]}: "
-                        f"new={len(pairs)} dedup={skipped}"
-                    )
-                elif skipped:
-                    logger.info(
-                        f"simple_memory {session_id[:16]} "
-                        f"fp 全部命中去重 {skipped} 条，不落盘"
+                        f"new={len(rendered)}"
                     )
         if summary and (
             not entry.get("summary_states")
@@ -267,5 +215,5 @@ class ContextDiffer:
                 )
         await self.store.update(
             session_id,
-            snapshot={"count": len(msgs), "last_fp": msgs[-1]["fp"]},
+            snapshot={"count": len(msgs)},
         )

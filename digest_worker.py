@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from astrbot.api import logger
 
 from .daily_hook import (
-    FPS_PREFIX,
     THINK_CAP,
     TOOL_RESULT_CAP,
     normalize,
@@ -96,6 +95,7 @@ class DigestWorker:
         think_cap: int = THINK_CAP,
         tool_cap: int = TOOL_RESULT_CAP,
         state_budget: int = 24000,
+        diary_max_ctx: int = 32768,
     ):
         self.store = store
         self.daily_file_for = daily_file_for
@@ -110,6 +110,7 @@ class DigestWorker:
         self.think_cap = think_cap
         self.tool_cap = tool_cap
         self.state_budget = state_budget
+        self.diary_max_ctx = diary_max_ctx
         self.session_whitelist: list[str] = []
         for item in session_whitelist or []:
             s = str(item or "").strip().replace("：", ":")
@@ -294,13 +295,12 @@ class DigestWorker:
         if full:
             await self.store.update(
                 sid,
-                snapshot={"count": len(full), "last_fp": full[-1]["fp"]},
+                snapshot={"count": len(full)},
             )
         _dbg(f"补尾 {sid[:24]} tail={len(tail_lines)} 条 full={bool(full)}")
         if tail_lines:
             block = f"## [tail] {sid[:24]}\n"
             block += "\n".join(tail_lines) + "\n"
-            block += FPS_PREFIX + " ".join(m["fp"] for m in tail) + " -->\n"
             async with self.lock:
                 self.daily_file_for(sid).append_to(raw_target, block)
             logger.info(f"simple_memory {sid[:16]} 补尾 {len(tail)} 条")
@@ -315,6 +315,32 @@ class DigestWorker:
             ]
 
         if states:
+            # S6: 天边界上下文压缩 - states 超阈值时 LLM 压缩旧部分
+            total_state_tokens = sum(count_tokens(s.get("text") or "") for s in states)
+            if total_state_tokens > 16000:
+                _dbg(f"S6 压缩触发 {sid[:24]} states={len(states)} tokens={total_state_tokens}")
+                keep_recent = max(1, len(states) // 7)  # 保留最近 ~15%
+                older = states[:-keep_recent]
+                recent = states[-keep_recent:]
+                older_text = "\n".join(
+                    f"[{s.get('ts','')}]\n{s.get('text','')}" for s in older
+                )
+                compress_prompt = (
+                    "以下是当天的多轮对话滚动摘要（按时间顺序）。"
+                    "请将前面的早期摘要压缩为一段简短的全局脉络描述（200字以内），"
+                    "保留关键事件、决策和转折。最近几条原样保留。\n\n"
+                    + older_text
+                )
+                compressed = await self._llm(
+                    "你是日记压缩助手，用角色视角简要概括。",
+                    compress_prompt,
+                )
+                if compressed:
+                    states = [
+                        {"ts": older[0].get("ts", 0), "text": compressed}
+                    ] + recent
+                    _dbg(f"S6 压缩完成 {sid[:24]} {len(older)}→1 states")
+
             day_str = now.date().isoformat()
             sum_path = self.daily_file_for(sid).summary_path_for(now)
             summary_text = ""
@@ -357,12 +383,10 @@ class DigestWorker:
                 input_parts.append(f"[近期日记（供参考连续性）]\n{prev_diaries}")
 
             _t0 = time.time()
-            _dbg(
-                f"llm 开始 {sid[:24]} summary_file={'yes' if summary_text else 'no'} "
-                f"states={len(states)} input={len(chr(10).join(input_parts))} 字"
-            )
-            diary = await self._llm(
-                await self._diary_system(now), "\n\n".join(input_parts)
+            system_prompt = await self._diary_system(now)
+            diary = await self._generate_diary(
+                system_prompt, states, input_parts, sid,
+                summary_file='yes' if summary_text else 'no',
             )
             _dl = len(diary or "")
             _dbg(f"llm 完成 {sid[:24]} {_dl} 字 {time.time() - _t0:.0f}s")
@@ -390,6 +414,58 @@ class DigestWorker:
 
         _dbg(f"store 更新 {sid[:24]} wm={int(now.timestamp())}")
         await self.store.update(sid, watermark_ts=int(now.timestamp()))
+
+    async def _generate_diary(
+        self, system_prompt: str, states: list[dict], input_parts: list[str],
+        sid: str, summary_file: str,
+    ) -> str:
+        """S5: 多轮滑动窗口日记生成。总输入超上下文时分批生成再合并。"""
+        prompt = "\n\n".join(input_parts)
+        total_tokens = count_tokens(system_prompt) + count_tokens(prompt)
+        if total_tokens <= self.diary_max_ctx:
+            _dbg(
+                f"llm 单轮 {sid[:24]} summary_file={summary_file} "
+                f"states={len(states)} input={total_tokens} token"
+            )
+            return await self._llm(system_prompt, prompt)
+        # 超上下文：滑动窗口
+        _dbg(
+            f"llm 滑动窗口 {sid[:24]} total={total_tokens} max={self.diary_max_ctx}"
+        )
+        states_text = self._render_states(states)
+        # 固定部分（tail + prev_diaries + system）
+        fixed_parts = [p for p in input_parts if not p.startswith("[摘要检查点")]
+        fixed_tokens = sum(count_tokens(p) for p in fixed_parts) + count_tokens(system_prompt)
+        budget = self.diary_max_ctx - fixed_tokens - 2000  # 留 2000 给输出
+        # 分批 states
+        batches: list[str] = []
+        current = ""
+        for s in states:
+            t = f"{s.get('text', '')}\n"
+            if count_tokens(current + t) > budget:
+                if current:
+                    batches.append(current)
+                current = t
+            else:
+                current += t
+        if current:
+            batches.append(current)
+        # 从最新批次开始生成
+        diary = ""
+        for round_i, batch in enumerate(reversed(batches)):
+            round_prompt_parts = [f"[第 {round_i + 1}/{len(batches)} 批会话内容]\n{batch}"]
+            if fixed_parts:
+                round_prompt_parts.extend(fixed_parts)
+            if round_i > 0 and diary:
+                round_prompt_parts.insert(0, f"[前轮已生成日记]\n{diary}")
+                merge_sys = system_prompt + "\n\n基于前轮日记和本批补充信息，更新并完善日记。保留前轮已有内容，合并新信息。"
+            else:
+                merge_sys = system_prompt
+            _dbg(f"llm 窗口 round={round_i + 1}/{len(batches)} {sid[:24]}")
+            result = await self._llm(merge_sys, "\n\n".join(round_prompt_parts))
+            if result:
+                diary = result
+        return diary
 
     # ---------- 数据获取 ----------
 

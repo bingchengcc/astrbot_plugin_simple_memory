@@ -14,7 +14,7 @@ def empty_entry() -> dict[str, Any]:
         "last_compress_ts": 0,
         "watermark_ts": 0,
         "summary_consumed": False,
-        "snapshot": {"count": 0, "last_fp": ""},
+        "snapshot": {"count": 0},
     }
 
 

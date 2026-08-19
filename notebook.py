@@ -58,6 +58,20 @@ def edit_text(text: str, num: int, content: str) -> tuple[str, bool]:
     return text, False
 
 
+def renumber_text(text: str) -> str:
+    lines = text.splitlines()
+    n = 0
+    out = []
+    for line in lines:
+        m = NOTE_ENTRY_RE.match(line.strip())
+        if m:
+            n += 1
+            out.append(f"{n}. [{m.group(2)}] {m.group(3)}")
+        else:
+            out.append(line)
+    return _join(out, text.endswith("\n"))
+
+
 def delete_text(text: str, num: int) -> tuple[str, bool]:
     lines = text.splitlines()
     for i, line in enumerate(lines):
