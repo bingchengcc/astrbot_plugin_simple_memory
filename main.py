@@ -266,7 +266,7 @@ class SimpleMemory(Star):
             "name": "astrbot_plugin_simple_memory",
             "author": "冰城cc",
             "description": "三层记忆：向量检索 + system prompt 注入 + 每日日记 + 共同小本子",
-            "version": "0.4.0",
+            "version": "0.4.1",
         }
 
     def _vdb_for(self, session_id: str):

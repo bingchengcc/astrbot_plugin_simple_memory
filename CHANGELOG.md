@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (2026-08-22)
+## 0.4.1 (2026-08-22)
 
 ### Changed
 - 捕获路径收敛为单一路径：`on_llm_response` 钩子，门控改用 `response.completion_text` 非空判断（流式/非流式、带/不带工具都过），不再依赖 DB 全量拉取
