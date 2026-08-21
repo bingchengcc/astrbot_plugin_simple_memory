@@ -4,7 +4,8 @@ AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力
 
 ## 特性
 
-- **小本子**：你确认的事实，每次对话自动注入，6 个工具管理增删改查 + 自动重编号 + 时间回溯备份
+- **小本子**：你确认的事实，每次对话自动注入，2 个工具管理增删改查 + 自动重编号 + 时间回溯备份
+- **小本子智能同步**：按会话+日期缓存注入内容，避免重复读文件
 - **日记**：AI 用自己人设写的一天，向量检索
 - **原文**：逐字落盘，grep 秒搜
 - **按会话隔离**：每个会话独立一套，互不串味
@@ -55,43 +56,42 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `enabled` | true | 总开关 |
-| `workspace_path` | memory | 记忆根目录（相对于 plugin_data） |
-| `embedding_provider_id` | | Embedding 提供商 ID（必填） |
-| `chunk_size` / `chunk_overlap` | 384 / 64 | 向量切块参数（token） |
-| `embed_max_ctx` | 0（不限） | Embedding 模型上下文窗口，设置后切块自动钳制 |
-| `embed_batch_size` | 16 | Embedding 批大小（本地小模型建议 4） |
-| `embed_concurrency` | 3 | Embedding 并发数（本地小模型建议 1） |
-| `inject_files` | ["MEMORY.md"] | 注入到 system prompt 的文件 |
-| `notebook_name` | 小本子 | 指令块中对小本子的称呼 |
-| `digest_enabled` | true | 捕获 + 日记总开关 |
-| `digest_time` | 23:30 | 天数边界 + 结算时刻 |
-| `boundary_inject` | true | 是否注入"一天边界"说明 |
-| `capture_think_chars` | 0 | 思考段截留长度，0=跳过（不建议开启，会将模型偶发的 think 泄漏永久存档） |
-| `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
-| `digest_state_budget` | 24000 | 摘要检查点输入预算（token） |
 | `digest_session_whitelist` | | 会话白名单（UMO 片段），留空=全部启用 |
 | `diary_provider_id` | | 写日记的 LLM 提供商 ID |
-| `diary_persona_id` | | 日记人设卡 ID |
 | `diary_max_ctx` | 32768 | 日记生成输入上限（token），超过时从旧→新接力压缩 |
-
-| `raw_ttl_days` | 0 | 原文保留天数，0=永久。到期后有日记则只删原文，无日记则整删当天文件夹 |
+| `diary_persona_id` | | 日记人设卡 ID |
+| `search_max_tokens` | 500 | 搜索结果 token 上限，0=不限 |
+| `use_embedding` | true | 启用向量检索 |
+| `embedding_provider_id` | | Embedding 提供商 ID |
+| `embed_max_ctx` | 0（不限） | Embedding 模型上下文窗口，设置后切块自动钳制 |
+| `notebook_name` | 小本子 | 指令块中对小本子的称呼 |
+| `notebook_memory_topics` | 身份,关系,偏好 | 始终记入小本子的类别 |
+| `notebook_index_topics` | 配置,路径,项目 | 放入索引的类别（只展示摘要） |
+| `digest_time` | 23:30 | 天数边界 + 结算时刻 |
+| `capture_think_chars` | 0 | 思考段截留长度，0=跳过 |
+| `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
+| `embed_batch_size` | 16 | Embedding 批大小（本地小模型建议 4） |
+| `embed_concurrency` | 3 | Embedding 并发数（本地小模型建议 1） |
+| `chunk_size` / `chunk_overlap` | 384 / 64 | 向量切块参数（token） |
+| `raw_ttl_days` | 0 | 原文保留天数，0=永久 |
 | `grep_max_files` | 20 | grep 搜索最大文件数 |
-| `grep_max_results` | 8 | grep 最大返回条数 |
-| `vector_max_results` | 5 | 向量检索最大返回条数 |
+| `grep_max_results` | 5 | grep 最大返回条数 |
+| `vector_max_results` | 2 | 向量检索最大返回条数 |
+| `auto_compress_notebook` | false | 小本子超限时自动压缩旧条目 |
+| `auto_compress_threshold` | 2000 | 小本子自动压缩触发阈值（token） |
 
 ## 存储布局
 
 ```
-<workspace_path>/
+memory/
 └── <会话ID冒号换下划线>/
     ├── MEMORY.md                    # 小本子
+    ├── INDEX.md                     # 参考记忆索引
     ├── backups/
     │   └── MEMORY_TIMESTAMP.md      # 小本子历史版本（时间回溯）
     ├── memory/
     │   ├── YYYY-MM-DD/
-    │   │   ├── raw.md               # 每日原文（grep，超32KB自动切 raw_2.md）
-    │   │   └── summary.md           # 压缩摘要（grep 优先）
+    │   │   └── raw.md               # 每日原文（grep，超32KB自动切 raw_2.md）
     │   └── diary/
     │       └── YYYY-MM-DD.md        # 每日日记（向量检索）
     └── chroma/                      # 独立向量库
@@ -101,14 +101,8 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 
 | 场景 | 工具 |
 |---|---|
-| 找过去发生了什么 | `memory_search(query, source, time_range, date)` |
-| 查看稳定用户事实 | `memory_read()` |
-| 新增一条稳定事实 | `memory_append(content)` |
-| 修改已有事实 | `memory_edit(num, content)` |
-| 删除错误事实 | `memory_delete(num)` |
-| 用户明确要求重写整本小本子 | `memory_write(content, confirm=true)` ⚠️ |
-
-> ⚠️ `memory_write` 是整篇覆盖，丢失不可恢复。优先用 append/edit/delete 做局部修改。
+| 搜索记忆 | `memory_search(query, source, time_range, date)` |
+| 读写小本子/INDEX | `memory_edit(num, content, topic, name)` |
 
 ## 一天边界
 
