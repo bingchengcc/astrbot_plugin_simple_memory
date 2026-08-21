@@ -1,18 +1,11 @@
 import asyncio
-import json
 import re
 import time
 from datetime import datetime, timedelta
 
 from astrbot.api import logger
 
-from .daily_hook import (
-    THINK_CAP,
-    TOOL_RESULT_CAP,
-    normalize,
-    render_msg,
-)
-from .daily_md import DEFAULT_DIGEST_TIME, cycle_file_date, parse_digest_time
+from .daily_md import DEFAULT_DIGEST_TIME, parse_digest_time
 
 TAIL_RAW_CAP = 4000
 CATCHUP_RAW_CAP = 8000
@@ -58,14 +51,6 @@ def most_recent_past_target(digest_time: str, now: datetime) -> datetime:
     return target
 
 
-def session_to_db_user_id(session_id: str) -> str:
-    """统一会话 ID（全冒号）→ conversations.user_id 格式（平台:类型!umo…）。"""
-    parts = session_id.split(":")
-    if len(parts) < 3:
-        return session_id
-    return f"{parts[0]}:{parts[1]}:{'!'.join(parts[2:])}"
-
-
 def calc_output_reserve(ctx: int) -> int:
     """S11: 输出预留——>=20000 固定 2000，<20000 线性适配（4096→500, 20000→2000）"""
     if ctx >= 20000:
@@ -77,8 +62,8 @@ class DigestWorker:
     """每日总结 worker：补尾 + 日记（摘要用完即焚）。
 
     每天 digest_time 对每个会话：
-    1. 补尾——DB 会话里超出快照条数的消息（钩子一轮延迟没落盘的最后一段）
-       落当日 md，快照推进到 DB 全量，防止下一轮钩子重灌；
+    1. 补尾——读当日 raw 文件（hook 单路径已实时落盘）的未压缩尾部原文，
+       作为日记生成的补充输入；
     2. 日记——有存储摘要才写：（摘要 + 尾巴/补尾摘要）→ 人设模型出日记
        追加同文件；失败/空返回则摘要原文直接充当当天记录；
     3. 水位——记录窗口（>36h 告警疑似补跑），只清已消费摘要，
@@ -99,8 +84,6 @@ class DigestWorker:
         tail_summary_threshold: int = 2000,
         raw_ttl_days: int = 0,
         session_whitelist=None,
-        think_cap: int = THINK_CAP,
-        tool_cap: int = TOOL_RESULT_CAP,
         diary_max_ctx: int = 32768,
     ):
         self.store = store
@@ -113,8 +96,6 @@ class DigestWorker:
         self.diary_persona_id = diary_persona_id
         self.tail_summary_threshold = tail_summary_threshold
         self.raw_ttl_days = raw_ttl_days
-        self.think_cap = think_cap
-        self.tool_cap = tool_cap
         self.diary_max_ctx = diary_max_ctx
         self.session_whitelist: list[str] = []
         for item in session_whitelist or []:
@@ -291,24 +272,8 @@ class DigestWorker:
                     "（>36h，疑似停机后补跑）"
                 )
 
-        tail, full = await self._fetch_tail(sid, entry)
-        tail_lines = [
-            s
-            for s in (render_msg(m, tool_cap=self.tool_cap) for m in tail)
-            if s
-        ]
-        if full:
-            await self.store.update(
-                sid,
-                snapshot={"count": len(full)},
-            )
-        _dbg(f"补尾 {sid[:24]} tail={len(tail_lines)} 条 full={bool(full)}")
-        if tail_lines:
-            block = f"## [tail] {sid[:24]}\n"
-            block += "\n".join(tail_lines) + "\n"
-            async with self.lock:
-                self.daily_file_for(sid).append_to(raw_target, block)
-            logger.info(f"simple_memory {sid[:16]} 补尾 {len(tail)} 条")
+        tail_text = self._read_raw_tail(raw_target)
+        _dbg(f"补尾 {sid[:24]} tail={len(tail_text)} 字")
 
         states = entry.get("summary_states") or []
         if not states and summary:
@@ -354,8 +319,6 @@ class DigestWorker:
                     summary_text = sum_path.read_text(encoding="utf-8").strip()
                 except Exception:
                     pass
-
-            tail_text = "\n".join(tail_lines)
 
             if summary_text:
                 input_parts = [
@@ -425,7 +388,6 @@ class DigestWorker:
         _dbg(
             f"llm 滑动窗口 {sid[:24]} total={total_tokens} max={self.diary_max_ctx}"
         )
-        states_text = self._render_states(states)
         # 固定部分（tail + prev_diaries + system）
         fixed_parts = [p for p in input_parts if not p.startswith("[摘要检查点")]
         fixed_tokens = sum(count_tokens(p) for p in fixed_parts) + count_tokens(system_prompt)
@@ -462,38 +424,30 @@ class DigestWorker:
 
     # ---------- 数据获取 ----------
 
-    async def _db_full_normalized(self, sid: str) -> list[dict]:
-        try:
-            db = self.context.get_db()
-            rows = await db.get_conversations(
-                user_id=session_to_db_user_id(sid)
-            )
-            if not rows:
-                return []
-            row = max(rows, key=lambda r: r.updated_at)
-            full = await db.get_conversation_by_id(row.conversation_id)
-            if full is None:
-                return []
-            raw = full.content or "[]"
-            if isinstance(raw, str):
-                raw = json.loads(raw)
-            return normalize(raw, think_cap=self.think_cap)
-        except Exception as e:
-            logger.warning(f"simple_memory 读取会话失败 {sid[:16]}: {e}")
-            return []
+    def _read_raw_tail(self, raw_target) -> str:
+        """补尾：读当日 raw 文件末尾原文（hook 单路径已实时落盘）。
 
-    async def _fetch_tail(
-        self, sid: str, entry: dict
-    ) -> tuple[list[dict], list[dict]]:
-        """返回 (尾部消息, DB 全量规范化消息)。"""
-        snap = entry.get("snapshot") or {}
-        n = int(snap.get("count") or 0)
-        if not n or self.context is None:
-            return [], []
-        full = await self._db_full_normalized(sid)
-        if len(full) <= n:
-            return [], []
-        return full[n:], full
+        raw 超 32KB 会轮换成 raw_2/3...，最新内容在最后一个已存在文件末尾，
+        从那里取尾部，不足 TAIL_RAW_CAP 再向前一个文件补齐。
+        """
+        try:
+            day_dir = raw_target.parent
+            files = sorted(day_dir.glob("raw*.md"))
+            existing = [f for f in files if f.is_file()]
+        except Exception:
+            return ""
+        if not existing:
+            return ""
+        buf = ""
+        for f in reversed(existing):
+            try:
+                content = f.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            buf = content + buf
+            if len(buf) >= TAIL_RAW_CAP:
+                break
+        return buf[-TAIL_RAW_CAP:]
 
     def _previous_diaries(self, sid: str, current_day: str, days: int = 2) -> str:
         """读取前 N 天的日记文件内容，供日记生成时参考连续性。"""

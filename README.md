@@ -14,11 +14,12 @@ AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力
 ## 工作原理
 
 ```
-每条用户消息
-  └ 钩子捕获 → 原文按天落盘 + 压缩摘要检查点
+每次 LLM 响应（on_llm_response，含报错/中断回合）
+  └ 钩子捕获 → 原文按天落盘（user + assistant + 可选 thinking + checkpoint）
+  └ 压缩检测（on_llm_request）→ 新压缩摘要入检查点 states + summary.md
 
 每天 digest_time
-  └ 结算 worker → 接力压缩(32k上限) + 补尾摘要(>2k) → 人设 LLM → 日记
+  └ 结算 worker → 接力压缩(32k上限) + 补尾(当日 raw 尾部原文) → 人设 LLM → 日记
   └ 跨天压缩: 当天 states >16k 时触发，新天从摘要续写
 
 每请求（注入）
@@ -27,6 +28,18 @@ AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力
 按需（召回）
   └ memory_search → 向量层(diary 语义, 时间预过滤) + grep 层(纯Python, 文件分组+行号+上下文)
 ```
+
+## KV 缓存策略
+
+小本子的写入先进入 pending 缓冲，不立即更新系统提示词，以减少 KV 缓存破坏。
+
+**注入触发时机：**
+
+- **/reset 和 /new**：通过抓日志关键词 `Switched to new conversation` 和 `Conversation reset successfully` 触发注入
+- **启动 AstrBot**：注入 pending 中未注入的内容
+- **压缩**：压缩后第一句会额外消耗一次 KV 输入用于更新系统提示词（压缩前没有可抓到的钩子或日志）
+
+**设计收益：** 相比工具直接写入小本子并立即更新系统提示词，本策略能省大量 token 输入，且最小化对 KV 缓存的破坏。全程仅有压缩时会额外消耗一次 KV 输入。
 
 ## 安装
 
@@ -68,8 +81,7 @@ git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/p
 | `notebook_memory_topics` | 身份,关系,偏好 | 始终记入小本子的类别 |
 | `notebook_index_topics` | 配置,路径,项目 | 放入索引的类别（只展示摘要） |
 | `digest_time` | 23:30 | 天数边界 + 结算时刻 |
-| `capture_think_chars` | 0 | 思考段截留长度，0=跳过 |
-| `capture_tool_chars` | 0 | 工具结果截留长度，0=跳过 |
+| `capture_think_chars` | 0 | 最终轮思考截留长度，0=不记，>0=assistant 行后追加 thinking 行（截断到 N 字） |
 | `embed_batch_size` | 16 | Embedding 批大小（本地小模型建议 4） |
 | `embed_concurrency` | 3 | Embedding 并发数（本地小模型建议 1） |
 | `chunk_size` / `chunk_overlap` | 384 / 64 | 向量切块参数（token） |

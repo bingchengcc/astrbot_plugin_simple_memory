@@ -14,12 +14,11 @@ def empty_entry() -> dict[str, Any]:
         "last_compress_ts": 0,
         "watermark_ts": 0,
         "summary_consumed": False,
-        "snapshot": {"count": 0},
     }
 
 
 class SessionStore:
-    """会话级中转存储：最新压缩摘要 + 上次请求快照 + 水位线。
+    """会话级中转存储：最新压缩摘要 + 水位线。
 
     插件 data 目录 JSON 持久化，单锁串行写，原子替换落盘。
     """

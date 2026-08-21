@@ -40,9 +40,9 @@ def _join(lines: list[str], had_trailing_newline: bool) -> str:
     return out
 
 
-def append_text(text: str, content: str, ts: str) -> tuple[str, int]:
+def append_text(text: str, content: str) -> tuple[str, int]:
     num = next_num(text)
-    line = f"{num}. [{ts}] {content.strip()}"
+    line = f"{num}. {content.strip()}"
     if text and not text.endswith("\n"):
         text += "\n"
     return text + line + "\n", num
@@ -80,3 +80,21 @@ def delete_text(text: str, num: int) -> tuple[str, bool]:
             del lines[i]
             return _join(lines, text.endswith("\n")), True
     return text, False
+
+
+def entry_content_at(text: str, num: int):
+    """Return the content of the entry at num, or None if not found."""
+    for e in parse_entries(text):
+        if e["num"] == int(num):
+            return e["content"]
+    return None
+
+def find_num_by_content(text: str, content: str) -> int:
+    """Return the num of the entry whose content matches (stripped), or 0 if none."""
+    target = (content or "").strip()
+    if not target:
+        return 0
+    for e in parse_entries(text):
+        if e["content"].strip() == target:
+            return e["num"]
+    return 0

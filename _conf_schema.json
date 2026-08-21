@@ -76,14 +76,8 @@
   "capture_think_chars": {
     "type": "int",
     "default": 0,
-    "description": "think 截留长度 (字符)",
-    "hint": "捕获原文时 〔think〕 内容截留多少字符，0=整段跳过（默认，降噪），>0=保留前 N 字符并标注总长。"
-  },
-  "capture_tool_chars": {
-    "type": "int",
-    "default": 0,
-    "description": "工具结果截留长度 (字符)",
-    "hint": "捕获原文时工具结果截留多少字符，0=整段跳过（默认，降噪），>0=保留前 N 字符。"
+    "description": "最终轮思考截留长度 (字符)",
+    "hint": "捕获原文时是否记录本回合的思考过程：0=不记（默认，降噪），>0=在 assistant 行后追加一行 thinking，思考内容截断到 N 字符并标注总长。只记最终轮，工具轮的思考不进原文。"
   },
   "embed_batch_size": {
     "type": "int",
