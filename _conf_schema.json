@@ -1,16 +1,5 @@
 {
-  "enabled": {
-    "type": "bool",
-    "default": true,
-    "description": "是否启用",
-    "hint": "关闭后插件完全静默，不注册命令和工具。"
-  },
-  "workspace_path": {
-    "type": "string",
-    "default": "memory",
-    "description": "记忆文件根目录",
-    "hint": "每个会话在这里各建一个独立文件夹（文件夹名=会话统一 ID，冒号换下划线），里面是小本子 MEMORY.md、日记 memory/、向量库 chroma/，互不干扰。memory 根下也可以放共享 .md（如 SOUL.md，列入 inject_files 即注入所有会话）。相对路径基于插件 data 目录解析，留空等同 memory。"
-  },
+
   "use_embedding": {
     "type": "bool",
     "default": true,
@@ -67,11 +56,18 @@
     "description": "小本子的名字",
     "hint": "注入指令块里使用的称呼，agent 确认稳定事实时会按这个名字跟用户说。"
   },
-  "digest_enabled": {
-    "type": "bool",
-    "default": true,
-    "description": "摘要+原文捕获与自动日记",
-    "hint": "关闭后钩子不捕获压缩摘要、不追加原文、worker 不写日记。"
+
+  "notebook_memory_topics": {
+    "type": "list",
+    "default": ["身份", "关系", "偏好"],
+    "description": "始终记入小本子的类别",
+    "hint": "这些话题标签的条目完整写入 MEMORY.md，全量注入。用户可增删。"
+  },
+  "notebook_index_topics": {
+    "type": "list",
+    "default": ["配置", "密钥", "项目"],
+    "description": "放入索引的类别（只展示摘要）",
+    "hint": "这些话题标签的条目写入 INDEX.md，注入时只展示摘要行，需要时 LLM 可查详情。用户可增删。"
   },
   "digest_time": {
     "type": "string",
@@ -97,12 +93,7 @@
     "description": "工具结果截留长度 (字符)",
     "hint": "捕获原文时工具结果截留多少字符，0=整段跳过（默认，降噪），>0=保留前 N 字符。"
   },
-  "digest_state_budget": {
-    "type": "int",
-    "default": 24000,
-    "description": "日记检查点输入预算 (token)",
-    "hint": "结算时摘要检查点（滚动摘要各时刻快照）的输入预算，超出则保留最早一条并自最新往前取，防止极端压缩天数喂爆日记模型。"
-  },
+
   "digest_session_whitelist": {
     "type": "list",
     "default": [],

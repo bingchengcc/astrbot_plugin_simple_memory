@@ -101,7 +101,6 @@ class DigestWorker:
         session_whitelist=None,
         think_cap: int = THINK_CAP,
         tool_cap: int = TOOL_RESULT_CAP,
-        state_budget: int = 24000,
         diary_max_ctx: int = 32768,
     ):
         self.store = store
@@ -116,7 +115,6 @@ class DigestWorker:
         self.raw_ttl_days = raw_ttl_days
         self.think_cap = think_cap
         self.tool_cap = tool_cap
-        self.state_budget = state_budget
         self.diary_max_ctx = diary_max_ctx
         self.session_whitelist: list[str] = []
         for item in session_whitelist or []:
@@ -518,19 +516,7 @@ class DigestWorker:
         return "\n".join(parts) if parts else ""
 
     def _render_states(self, states: list[dict]) -> str:
-        """检查点拼文：超 state_budget 时保首条 + 自最新往前取。"""
-        total = sum(count_tokens(s.get("text") or "") for s in states)
-        if total > self.state_budget:
-            head = states[0]
-            picked: list[dict] = []
-            used = count_tokens(head.get("text") or "")
-            for s in reversed(states[1:]):
-                c = count_tokens(s.get("text") or "")
-                if used + c > self.state_budget:
-                    break
-                picked.append(s)
-                used += c
-            states = [head] + picked[::-1]
+        """检查点拼文。"""
         lines = []
         for s in states:
             ts = int(s.get("ts") or 0)

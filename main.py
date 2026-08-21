@@ -67,8 +67,7 @@ class SimpleMemory(Star):
         super().__init__(context, config)
         cfg = config or {}
         self.cfg = cfg
-        self.enabled: bool = bool(cfg.get("enabled", True))
-        self.workspace: Path = Path(str(cfg.get("workspace_path", "") or ""))
+        self.workspace: Path = Path("memory")
         chunk_size = int(cfg.get("chunk_size") or 384)
         max_ctx = int(cfg.get("embed_max_ctx") or 0)
         if max_ctx > 0:
@@ -93,28 +92,22 @@ class SimpleMemory(Star):
         self._daily_lock = asyncio.Lock()
         self._notebook_lock = asyncio.Lock()
         self.notebook_name = str(cfg.get("notebook_name") or "小本子")
+        self._memory_topics: list[str] = self.cfg.get("notebook_memory_topics") or ["身份", "关系", "偏好"]
+        self._index_topics: list[str] = self.cfg.get("notebook_index_topics") or ["配置", "密钥", "项目"]
         self._inject_cache: dict[str, str] = {}
         self._inited = False
         self._index_state: dict = {}
-        self.digest_enabled: bool = bool(cfg.get("digest_enabled", True))
         self.boundary_inject: bool = bool(cfg.get("boundary_inject", True))
         self.capture_think: int = int(cfg.get("capture_think_chars") or 0)
         self.capture_tool: int = int(cfg.get("capture_tool_chars") or 0)
-        self.digest_state_budget: int = int(
-            cfg.get("digest_state_budget") or 24000
-        )
         self.differ: ContextCapture | None = None
         self.digest_worker: DigestWorker | None = None
 
     async def initialize(self) -> None:
-        _dbg(f"initialize() start enabled={self.enabled}")
+        _dbg(f"initialize() start")
         _scan_cmd_handlers()
-        if not self.enabled:
-            logger.info("simple_memory 未启用")
-            _dbg("initialize() early return: disabled")
-            return
         self.workspace = _resolve_data_path(
-            str(self.cfg.get("workspace_path") or ""), "memory"
+            "", "memory"
         )
         self._index_state = self._load_index_state()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -126,35 +119,33 @@ class SimpleMemory(Star):
         )
         self._inited = True
 
-        if self.digest_enabled:
-            self._inject_compress_instruction()
+        self._inject_compress_instruction()
 
-            self.differ = ContextCapture(
-                store=SessionStore(StarTools.get_data_dir() / "session_store.json"),
-                daily_file_for=self.spaces.daily_file,
-                lock=self._daily_lock,
-                think_cap=self.capture_think,
-                tool_cap=self.capture_tool,
-                context=self.context,
-            )
-            self.digest_worker = DigestWorker(
-                store=self.differ.store,
-                daily_file_for=self.spaces.daily_file,
-                diary_file_for=self.spaces.diary_file,
-                context=self.context,
-                lock=self._daily_lock,
-                digest_time=str(self.cfg.get("digest_time") or DEFAULT_DIGEST_TIME),
-                diary_provider_id=str(self.cfg.get("diary_provider_id") or ""),
-                diary_persona_id=str(self.cfg.get("diary_persona_id") or ""),
-                
-                raw_ttl_days=int(self.cfg.get("raw_ttl_days") or 0),
-                session_whitelist=self.cfg.get("digest_session_whitelist") or [],
-                think_cap=self.capture_think,
-                tool_cap=self.capture_tool,
-                state_budget=self.digest_state_budget,
-                diary_max_ctx=max(4096, int(self.cfg.get("diary_max_ctx") or 32768)),
-            )
-            self.digest_worker.start()
+        self.differ = ContextCapture(
+            store=SessionStore(StarTools.get_data_dir() / "session_store.json"),
+            daily_file_for=self.spaces.daily_file,
+            lock=self._daily_lock,
+            think_cap=self.capture_think,
+            tool_cap=self.capture_tool,
+            context=self.context,
+        )
+        self.digest_worker = DigestWorker(
+            store=self.differ.store,
+            daily_file_for=self.spaces.daily_file,
+            diary_file_for=self.spaces.diary_file,
+            context=self.context,
+            lock=self._daily_lock,
+            digest_time=str(self.cfg.get("digest_time") or DEFAULT_DIGEST_TIME),
+            diary_provider_id=str(self.cfg.get("diary_provider_id") or ""),
+            diary_persona_id=str(self.cfg.get("diary_persona_id") or ""),
+            
+            raw_ttl_days=int(self.cfg.get("raw_ttl_days") or 0),
+            session_whitelist=self.cfg.get("digest_session_whitelist") or [],
+            think_cap=self.capture_think,
+            tool_cap=self.capture_tool,
+            diary_max_ctx=max(4096, int(self.cfg.get("diary_max_ctx") or 32768)),
+        )
+        self.digest_worker.start()
 
         use_embedding = bool(self.cfg.get("use_embedding", True))
         provider_id = str(self.cfg.get("embedding_provider_id") or "")
@@ -369,8 +360,6 @@ class SimpleMemory(Star):
         return True
 
     def _pointer_block(self, session_id: str) -> str:
-        if not self.digest_enabled:
-            return ""
         day = cycle_file_date(datetime.now(), self.spaces.digest_time)
         prev = (
             datetime.strptime(day, "%Y-%m-%d").date() - timedelta(days=1)
@@ -394,12 +383,27 @@ class SimpleMemory(Star):
 
     def _notebook_block(self) -> str:
         name = self.notebook_name
+        all_topics = self._memory_topics + self._index_topics
+        topic_enum = ", ".join(f"'{t}'" for t in all_topics)
         return (
             f"## {name}（MEMORY.md）\n"
-            "长期共同记忆，条目格式 序号. [日期时间] 内容。\n"
-            f"用户确认的稳定事实（偏好、决定、长期信息）可追加进{name}：先问一句，得到点头后用 memory_append 写入；"
-            "只问稳定事实，不问即时状态（今天日程、临时心情）。\n"
-            "查看用 memory_read，改单条用 memory_edit，删单条用 memory_delete，整篇重写用 memory_write（逃生门，慎用）。"
+            f"长期共同记忆，每次对话自动注入。条目格式：序号. [日期时间] [话题] 内容。\n"
+            f"写入规则：\n"
+            f"- 用户说了一句稳定事实（身份、偏好、决定）→ 立即 memory_edit 追加，不必等用户说'记住'\n"
+            f"- 用户纠正了旧信息 → memory_edit 改对应条目\n"
+            f"- 纯提问、即时状态（今天心情、临时日程）→ 不写\n"
+            f"- 你的搜索/推理/建议 → 不写（可重新推导的不存）\n"
+            f"- 代码/日志/配置示例中出现的值（key/token/密码/端口）→ 不主动记，除非用户明确说'记一下'\n"
+            f"- 代码结构、函数名、文件路径（代码库里有）、git 历史（git log 能查）→ 不写\n"
+            f"- 存疑就不写\n"
+            f"- 写入后不要在回复中提'已记住''已记录'，直接回答用户的问题\n"
+            f"读取规则：\n"
+            f"- 回答涉及用户过去说的事之前，先 memory_edit 读取小本子确认\n"
+            f"- 说'我不记得'之前必须先查过\n"
+            f"读/改/删小本子用 memory_edit（content 留空即删除），"
+            f"整篇重写用 memory_edit（不传 num + 多行 content，逃生门慎用）。"
+            f"INDEX 条目用 memory_edit 传 name 参数操作。\n"
+            f"当对话变长时，部分上下文会被摘要压缩，你不需要提前收尾或总结当前进度，继续做事或聊天即可。"
         )
 
     async def _maybe_compress_notebook(self, session_id: str) -> None:
@@ -461,7 +465,22 @@ class SimpleMemory(Star):
         if self.spaces.is_active(session_id):
             parts.append(self._pointer_block(session_id))
             parts.append(self._notebook_block())
+            # S1: 注入 MEMORY.md 全文
+            nb = self.spaces.notebook_path(session_id)
+            if nb.is_file():
+                nb_text = nb.read_text(encoding="utf-8", errors="ignore").strip()
+                if nb_text:
+                    parts.append(f"## {self.notebook_name}\n{nb_text}")
+            # S1: 注入 INDEX.md 摘要行
+            idx = self.spaces.path(session_id) / "INDEX.md"
+            if idx.is_file():
+                idx_text = idx.read_text(encoding="utf-8", errors="ignore").strip()
+                summary_lines = [l for l in idx_text.split("\n") if "摘要:" in l]
+                if summary_lines:
+                    parts.append("## 参考记忆（INDEX.md）\n" + "\n".join(summary_lines))
         for name in self.inject_files:
+            if name == "MEMORY.md":
+                continue
             p = self.spaces.path(session_id) / str(name)
             if not p.is_file():
                 p = self.workspace / str(name)
@@ -614,7 +633,7 @@ class SimpleMemory(Star):
 
     @filter.on_llm_request()
     async def _inject(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
-        if not self.enabled or not self._inited:
+        if not self._inited:
             return
         session_id = req.session_id or str(event.unified_msg_origin)
         cache_key = f"{session_id}:{cycle_file_date(datetime.now(), self.spaces.digest_time)}"
@@ -634,7 +653,7 @@ class SimpleMemory(Star):
     async def _capture_streaming(
         self, event: AstrMessageEvent, response: LLMResponse
     ) -> None:
-        if not self.enabled or not self.spaces:
+        if not self.spaces:
             return
         result = event.get_result()
         if result is None:
@@ -674,7 +693,7 @@ class SimpleMemory(Star):
 
     @filter.after_message_sent()
     async def _capture(self, event: AstrMessageEvent) -> None:
-        if not self.enabled or not self.differ:
+        if not self.differ:
             return
         try:
             session_id = str(event.unified_msg_origin)
@@ -695,11 +714,11 @@ class SimpleMemory(Star):
         time_range: str = "",
         date: str = "",
     ) -> str:
-        """先搜再答——只要用户提到过去发生的事、说过的话、做过的决定、玩过的游戏、讨论过的内容，必须调用此工具搜索后再回答，不许凭印象编。diary模式走向量语义检索（自然语言即可），raw模式走关键词匹配（空格分隔多关键词，OR匹配按命中数排序），all并行两者。未找到时raw层可能是关键词不匹配，换个词或更宽泛的表述再试。
+        """先搜再答——只要用户提到过去发生的事、说过的话、做过的决定、玩过的游戏、讨论过的内容，或自己记不清时，先查再猜。必须调用此工具搜索后再回答，不许凭印象编。diary模式走向量语义检索（自然语言即可），raw模式走关键词匹配（空格分隔多关键词，OR匹配按命中数排序），all并行两者。未找到时raw层可能是关键词不匹配，换个词或更宽泛的表述再试。
 
         Args:
             query(string): 搜索内容。diary/all模式用自然语言描述，raw模式用关键词（多关键词空格分隔，如"天气 瑞安"）
-            source(string): all=日记+原文（默认），diary=只查日记，raw=只查原文，latest=最近消息（按时间返回）
+            source(string): all=日记+原文+INDEX（默认），diary=只查日记，raw=只查原文，index=只查INDEX，latest=最近消息（按时间返回）
             time_range(string): 模糊时间范围，如 7d=最近7天、24h=最近24小时，留空不限。与date二选一，同时填时date优先
             date(string): 精确锁定某天(YYYY-MM-DD)、某月(YYYY-MM)或 "all"。与time_range二选一，同时填时date优先
         """
@@ -709,11 +728,18 @@ class SimpleMemory(Star):
         src = (source or "all").strip().lower()
         if src in ("simple_memory", "astrbot"):
             src = "all"
-        if src not in ("all", "diary", "raw", "latest"):
+        if src not in ("all", "diary", "raw", "latest", "index"):
             src = "all"
         # date优先：date有值时清除time_range
         if date and date.strip().lower() != "all":
             time_range = ""
+
+        # S1: source=index - 搜索 INDEX.md
+        if src == "index":
+            parts = self._grep_index(session_id, query)
+            if not parts:
+                return "INDEX 中未找到相关内容"
+            return self._apply_search_limits("\n---\n".join(parts))
 
         # S9: source=latest - 返回最近消息
         if src == "latest":
@@ -755,9 +781,40 @@ class SimpleMemory(Star):
         if src in ("all", "raw"):
             date_filter = (date or "").strip().lower()
             parts.extend(self._grep_search(session_id, query, time_range, date_filter))
+        if src == "all":
+            parts.extend(self._grep_index(session_id, query))
         if not parts:
             return "未找到相关记忆"
         return self._apply_search_limits("\n---\n".join(parts))
+
+    def _grep_index(self, session_id: str, query: str) -> list[str]:
+        """S1: 搜索 INDEX.md 内容（[条目] 或 [tag] 匹配）。"""
+        p = self.spaces.path(session_id) / "INDEX.md"
+        if not p.is_file():
+            return []
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        keywords = query.lower().split()
+        lines = text.split("\n")
+        matched_lines = []
+        for i, line in enumerate(lines):
+            low = line.lower()
+            if any(kw in low for kw in keywords):
+                # 带上下文：如果匹配摘要行，带上下几行
+                if "摘要:" in line:
+                    # 找到该块的范围
+                    block_start = i
+                    block_end = i + 1
+                    while block_end < len(lines) and lines[block_end].strip() and not lines[block_end].startswith("["):
+                        block_end += 1
+                    # 找下一块
+                    if block_end < len(lines) and "摘要:" in lines[block_end]:
+                        block_end -= 1
+                    matched_lines.append("\n".join(lines[block_start:block_end]))
+                else:
+                    matched_lines.append(line)
+        if not matched_lines:
+            return []
+        return [f"[INDEX.md]\n" + "\n".join(matched_lines)]
 
     def _apply_search_limits(self, result: str) -> str:
         """S12: token上限截断 + system-reminder"""
@@ -988,122 +1045,183 @@ class SimpleMemory(Star):
         except Exception:
             logger.exception("simple_memory 小本子备份失败")
 
-    @filter.llm_tool(name="memory_read")
-    async def memory_read(self, event: AstrMessageEvent) -> str:
-        """读取小本子（MEMORY.md）全文。"""
-        session_id = str(event.unified_msg_origin)
-        if not self.spaces.is_active(session_id):
-            return "本会话未启用记忆（不在白名单）"
-        p = self._notebook_path(event)
-        if not p.is_file():
-            return "小本子还是空的"
-        text = p.read_text(encoding="utf-8", errors="ignore").strip()
-        return text or "小本子还是空的"
-
-    @filter.llm_tool(name="memory_append")
-    async def memory_append(self, event: AstrMessageEvent, content: str) -> str:
-        """向小本子（MEMORY.md）追加一条记忆。
-
-        Args:
-            content(string): 要记住的内容，一行，多句用分号隔开
-        """
-        session_id = str(event.unified_msg_origin)
-        if not self.spaces.is_active(session_id):
-            return "本会话未启用记忆（不在白名单）"
-        async with self._notebook_lock:
-            p = self._notebook_path(event)
-            old = p.read_text(encoding="utf-8", errors="ignore") if p.is_file() else ""
-            dup = find_dup_num(old, content)
-            if dup:
-                return f"小本子已有相同内容（第 {dup} 条），未重复追加"
-            new, num = append_text(old, content, time.strftime("%Y-%m-%d %H:%M"))
-            new = renumber_text(new)
-            self._notebook_bak(p)
-            p.write_text(new, encoding="utf-8")
-            self._invalidate_session_cache(session_id)
-        return f"已记入小本子第 {num} 条：{content.strip()}"
 
     @filter.llm_tool(name="memory_edit")
-    async def memory_edit(self, event: AstrMessageEvent, num: int, content: str) -> str:
-        """修改小本子中指定序号条目的内容，序号和时间戳不变。
+    async def memory_edit(self, event: AstrMessageEvent, num: int = 0, content: str = "", topic: str = "", name: str = "") -> str:
+        """小本子操作（读/追加/修改/删除/重写 + INDEX 条目操作）。
+
+        MEMORY.md 操作：
+        - 读取：num=0, content 留空, topic 留空 → 返回 MEMORY.md 全文
+        - 追加：不传 num，content 有内容，传 topic → 新增一条
+        - 修改：传 num + content → 替换该条内容
+        - 删除：传 num，content 留空 → 删掉该条，后续自动重排
+        - 整篇重写（最后的手段）：不传 num，content 为多行全文，topic 留空 → 覆盖整个 MEMORY.md
+
+        INDEX 操作：
+        - 写入：传 name（条目名，如"配置"）+ content（[tag]:[内容]）→ 写入 INDEX.md 对应条目块
 
         Args:
-            num(number): 要修改的条目序号
-            content(string): 新的内容
+            num(number): 条目序号。0 或不传 = 读取/追加/重写模式
+            content(string): 追加/修改时填内容；删除时留空；重写时填完整全文
+            topic(string): 话题类型（仅追加时必填）
+            name(string): INDEX 条目名（如"配置""项目"），定位 INDEX.md 中对应条目块
         """
         session_id = str(event.unified_msg_origin)
         if not self.spaces.is_active(session_id):
             return "本会话未启用记忆（不在白名单）"
-        async with self._notebook_lock:
-            p = self._notebook_path(event)
+
+        # INDEX 操作
+        if name:
+            return await self._index_edit(session_id, name, content)
+
+        num = int(num or 0)
+        p = self._notebook_path(event)
+
+        # 读取模式
+        if num == 0 and not content:
             if not p.is_file():
                 return "小本子还是空的"
-            old = p.read_text(encoding="utf-8", errors="ignore")
-            new, hit = edit_text(old, int(num), content)
-            if not hit:
-                return f"没找到第 {int(num)} 条，先用 memory_read 看现有条目"
-            new = renumber_text(new)
-            self._notebook_bak(p)
-            p.write_text(new, encoding="utf-8")
-            self._invalidate_session_cache(session_id)
-        return f"已修改小本子第 {int(num)} 条：{content.strip()}"
+            text = p.read_text(encoding="utf-8", errors="ignore").strip()
+            return text or "小本子还是空的"
 
-    @filter.llm_tool(name="memory_delete")
-    async def memory_delete(self, event: AstrMessageEvent, num: int) -> str:
-        """删除小本子中指定序号的条目，后续条目自动重排。
-
-        Args:
-            num(number): 要删除的条目序号
-        """
-        session_id = str(event.unified_msg_origin)
-        if not self.spaces.is_active(session_id):
-            return "本会话未启用记忆（不在白名单）"
         async with self._notebook_lock:
-            p = self._notebook_path(event)
-            if not p.is_file():
-                return "小本子还是空的"
-            old = p.read_text(encoding="utf-8", errors="ignore")
-            new, hit = delete_text(old, int(num))
-            if not hit:
-                return f"没找到第 {int(num)} 条，先用 memory_read 看现有条目"
-            new = renumber_text(new)
-            self._notebook_bak(p)
-            p.write_text(new, encoding="utf-8")
-            self._invalidate_session_cache(session_id)
-        return f"已删除小本子第 {int(num)} 条"
-
-    @filter.llm_tool(name="memory_write")
-    async def memory_write(
-        self, event: AstrMessageEvent, content: str, confirm: bool = False
-    ) -> str:
-        """整篇重写小本子（MEMORY.md）。⚠️ 高风险操作：会覆盖全部已有条目，丢失不可恢复。
-除非用户明确要求'重写小本子'，否则应优先使用 memory_append/edit/delete 做局部修改。
-
-        Args:
-            content(string): 新的全文
-            confirm(boolean): 设为 true 才真正写入；false 时仅返回大小对比供确认
-        """
-        session_id = str(event.unified_msg_origin)
-        if not self.spaces.is_active(session_id):
-            return "本会话未启用记忆（不在白名单）"
-        async with self._notebook_lock:
-            p = self._notebook_path(event)
             old = p.read_text(encoding="utf-8", errors="ignore") if p.is_file() else ""
+
+            # 修改模式
+            if num > 0 and content:
+                new, hit = edit_text(old, num, content)
+                if not hit:
+                    return f"没找到第 {num} 条，先读取小本子看现有条目"
+                new = renumber_text(new)
+                self._notebook_bak(p)
+                p.write_text(new, encoding="utf-8")
+                self._invalidate_session_cache(session_id)
+                return f"已修改第 {num} 条：{content.strip()}"
+
+            # 删除模式
+            if num > 0 and not content:
+                if not p.is_file():
+                    return "小本子还是空的"
+                new, hit = delete_text(old, num)
+                if not hit:
+                    return f"没找到第 {num} 条，先读取小本子看现有条目"
+                new = renumber_text(new)
+                self._notebook_bak(p)
+                p.write_text(new, encoding="utf-8")
+                self._invalidate_session_cache(session_id)
+                return f"已删除第 {num} 条"
+
+            # 追加模式（自动路由：核心→MEMORY.md，索引→INDEX.md）
+            if topic:
+                if topic in self._index_topics:
+                    # 路由到 INDEX.md
+                    return await self._index_edit(session_id, topic, content)
+                # 核心条目 → MEMORY.md
+                ts = time.strftime("%Y-%m-%d %H:%M")
+                dup = find_dup_num(old, content)
+                if dup:
+                    return f"小本子已有相同内容（第 {dup} 条），未重复追加"
+                new, new_num = append_text(old, f"[{topic}] {content.strip()}", ts)
+                new = renumber_text(new)
+                self._notebook_bak(p)
+                p.write_text(new, encoding="utf-8")
+                self._invalidate_session_cache(session_id)
+                return f"已记入小本子第 {new_num} 条：{content.strip()}"
+
+            # 整篇重写模式（无 topic，多行 content）
             old_size = len(old.strip())
             new_size = len(content.strip())
-            if not confirm:
-                return (
-                    f"⚠️ 将重写小本子。当前 {old_size} 字 → 新 {new_size} 字。"
-                    f"确认无误后设 confirm=true 执行。"
-                )
-            warning = ""
             if old.strip() and new_size < old_size * 0.5:
                 warning = "（注意：新内容不到旧内容一半）"
+            else:
+                warning = ""
             self._notebook_bak(p)
             new_content = renumber_text(content.strip() + "\n")
             p.write_text(new_content, encoding="utf-8")
             self._invalidate_session_cache(session_id)
-        return f"已重写小本子。{warning}"
+            return f"已重写小本子。{warning}"
+
+        return "请检查参数：需要 num+content（修改）、num（删除）、topic+content（追加）或多行content（重写）"
+
+    async def _index_edit(self, session_id: str, entry_name: str, content: str) -> str:
+        """INDEX.md 条目操作：解析 [tag]:[内容] 写入对应条目块。"""
+        p = self.spaces.path(session_id) / "INDEX.md"
+        # 解析 content 中的 [tag]:[内容]
+        tag_lines = []
+        for line in content.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r"\[([^\]]+)\]:\[(.*)\]", line)
+            if m:
+                tag_lines.append((m.group(1), m.group(2)))
+        if not tag_lines:
+            return f"INDEX 写入失败：content 中未找到 [tag]:[内容] 格式的行"
+
+        # 读取现有 INDEX.md
+        if p.is_file():
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        else:
+            text = ""
+
+        # 找对应条目块
+        block_header = f"[{entry_name}]摘要:"
+        lines = text.split("\n") if text else []
+        block_start = None
+        for i, line in enumerate(lines):
+            if line.startswith(block_header):
+                block_start = i
+                break
+
+        if block_start is None:
+            # 新建条目块
+            summary_tags = " ".join(f"[{t}]" for t, _ in tag_lines)
+            body_lines = [f"[{t}]:[{c}]" for t, c in tag_lines]
+            block = f"{block_header} {summary_tags}\n正文\n" + "\n".join(body_lines)
+            if text and not text.endswith("\n"):
+                text += "\n\n"
+            elif text:
+                text += "\n"
+            text += block + "\n"
+        else:
+            # 更新已有条目块：找摘要行和正文
+            # 摘要行
+            summary_line = lines[block_start]
+            existing_tags = re.findall(r"\[([^\]]+)\]", summary_line.split(":", 1)[1] if ":" in summary_line else "")
+            # 找正文结束位置（下一个空行或下一个 [条目]摘要: 开头）
+            body_end = block_start + 1  # skip header
+            # find "正文" marker
+            if body_end < len(lines) and lines[body_end].strip() == "正文":
+                body_end += 1
+            while body_end < len(lines) and lines[body_end].strip() and not lines[body_end].startswith("["):
+                body_end += 1
+
+            # Update tags in body
+            for tag, val in tag_lines:
+                found = False
+                for j in range(body_end, block_start + 3):
+                    if j < len(lines) and lines[j].startswith(f"[{tag}]:"):
+                        lines[j] = f"[{tag}]:[{val}]"
+                        found = True
+                        break
+                if not found:
+                    # Add new tag line and update summary
+                    if tag not in existing_tags:
+                        lines[body_end] = f"[{tag}]:[{val}]"
+                        # insert before body_end
+                        lines.insert(body_end, f"[{tag}]:[{val}]")
+                        body_end += 1
+                    existing_tags.append(tag)
+            # Update summary line
+            summary_tags_str = " ".join(f"[{t}]" for t in existing_tags)
+            lines[block_start] = f"{block_header} {summary_tags_str}"
+
+            text = "\n".join(lines)
+
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        self._invalidate_session_cache(session_id)
+        return f"INDEX [{entry_name}] 已更新: {', '.join(t for t, _ in tag_lines)}"
 
     @filter.command_group("mem")
     def mem_group(self) -> None:
@@ -1115,7 +1233,7 @@ class SimpleMemory(Star):
         """查看索引与注入状态"""
         _dbg(f"mem status hit sender={event.get_sender_id()!r}")
         if not self.spaces:
-            yield event.plain_result("记忆插件未启动（检查 enabled / workspace_path）")
+            yield event.plain_result("记忆插件未启动（检查插件是否已加载）")
             return
         session_id = str(event.unified_msg_origin)
 
