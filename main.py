@@ -487,11 +487,6 @@ class SimpleMemory(Star):
         if self.spaces.is_active(session_id):
             parts.append(self._pointer_block(session_id))
             parts.append(self._notebook_block())
-            parts.append(
-                "撤销记忆操作：未落地（还在 pending）读 `"
-                f"{self._pending_path(session_id)}` 删对应行；"
-                f"已落地从 `{self.spaces.path(session_id) / 'ops.md'}` 查改前值，用 memory_edit 删/改/增恢复"
-            )
             # S1: 注入 MEMORY.md 全文
             nb = self.spaces.notebook_path(session_id)
             if nb.is_file():
