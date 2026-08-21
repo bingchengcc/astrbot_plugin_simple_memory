@@ -804,11 +804,13 @@ class SimpleMemory(Star):
                     # 找到该块的范围
                     block_start = i
                     block_end = i + 1
-                    while block_end < len(lines) and lines[block_end].strip() and not lines[block_end].startswith("["):
+                    while block_end < len(lines):
+                        stripped = lines[block_end].strip()
+                        if not stripped:
+                            break
+                        if stripped.startswith("[") and "摘要:" in stripped:
+                            break
                         block_end += 1
-                    # 找下一块
-                    if block_end < len(lines) and "摘要:" in lines[block_end]:
-                        block_end -= 1
                     matched_lines.append("\n".join(lines[block_start:block_end]))
                 else:
                     matched_lines.append(line)
@@ -1196,22 +1198,43 @@ class SimpleMemory(Star):
             while body_end < len(lines) and lines[body_end].strip() and not lines[body_end].startswith("["):
                 body_end += 1
 
+            # Find block end (next block header or EOF)
+            block_end = body_end
+            while block_end < len(lines):
+                stripped = lines[block_end].strip()
+                if not stripped or (stripped.startswith("[") and "\u6458\u8981:" in stripped and stripped[:len(entry_name)+2] != f"[{entry_name}]"):
+                    break
+                if stripped.startswith("[" + entry_name + "]"):
+                    break
+                block_end += 1
+
             # Update tags in body
             for tag, val in tag_lines:
                 found = False
-                for j in range(body_end, block_start + 3):
+                for j in range(body_end, block_end):
                     if j < len(lines) and lines[j].startswith(f"[{tag}]:"):
                         lines[j] = f"[{tag}]:[{val}]"
                         found = True
                         break
                 if not found:
-                    # Add new tag line and update summary
                     if tag not in existing_tags:
-                        lines[body_end] = f"[{tag}]:[{val}]"
-                        # insert before body_end
-                        lines.insert(body_end, f"[{tag}]:[{val}]")
-                        body_end += 1
+                        insert_pos = block_end
+                        if insert_pos >= len(lines) or not lines[insert_pos - 1].strip():
+                            insert_pos = max(body_end, len(lines) - 1)
+                            while insert_pos > 0 and not lines[insert_pos - 1].strip():
+                                insert_pos -= 1
+                        lines.insert(insert_pos, f"[{tag}]:[{val}]")
+                        body_end = min(body_end, insert_pos)
                     existing_tags.append(tag)
+            # Recompute block_end after inserts
+            block_end = body_end
+            while block_end < len(lines):
+                stripped = lines[block_end].strip()
+                if not stripped or (stripped.startswith("[") and "\u6458\u8981:" in stripped and stripped[:len(entry_name)+2] != f"[{entry_name}]"):
+                    break
+                if stripped.startswith("[" + entry_name + "]"):
+                    break
+                block_end += 1
             # Update summary line
             summary_tags_str = " ".join(f"[{t}]" for t in existing_tags)
             lines[block_start] = f"{block_header} {summary_tags_str}"
