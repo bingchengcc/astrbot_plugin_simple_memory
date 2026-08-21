@@ -672,6 +672,20 @@ class SimpleMemory(Star):
                     nb_old, _ = append_text(nb_old, f"[{topic}] {body}", ts)
                     nb_modified = True
                     flushed = True
+            elif line.startswith("E:"):
+                m = re.match(r"(\d+):(.*)", line[2:])
+                if m:
+                    nb_old, hit = edit_text(nb_old, int(m.group(1)), m.group(2))
+                    if hit:
+                        nb_modified = True
+                        flushed = True
+            elif line.startswith("D:"):
+                payload = line[2:].strip()
+                if payload.isdigit():
+                    nb_old, hit = delete_text(nb_old, int(payload))
+                    if hit:
+                        nb_modified = True
+                        flushed = True
             elif line.startswith("I:"):
                 payload = line[2:].strip()
                 parts = payload.split(maxsplit=1)
@@ -1195,24 +1209,20 @@ class SimpleMemory(Star):
 
             # 修改模式
             if num > 0 and content:
-                new, hit = edit_text(old, num, content)
+                _, hit = edit_text(old, num, content)
                 if not hit:
                     return f"没找到第 {num} 条，先读取小本子看现有条目"
-                new = renumber_text(new)
-                self._notebook_bak(p)
-                p.write_text(new, encoding="utf-8")
+                self._append_pending(session_id, f"E:{num}:{content.strip()}")
                 return f"已修改第 {num} 条：{content.strip()}"
 
             # 删除模式
             if num > 0 and not content:
                 if not p.is_file():
                     return "小本子还是空的"
-                new, hit = delete_text(old, num)
+                _, hit = delete_text(old, num)
                 if not hit:
                     return f"没找到第 {num} 条，先读取小本子看现有条目"
-                new = renumber_text(new)
-                self._notebook_bak(p)
-                p.write_text(new, encoding="utf-8")
+                self._append_pending(session_id, f"D:{num}")
                 return f"已删除第 {num} 条"
 
             # 追加模式（自动路由：核心→MEMORY.md，索引→INDEX.md）
