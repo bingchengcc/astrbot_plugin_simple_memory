@@ -1,4 +1,4 @@
-# simple_memory
+# lite_memory
 
 AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力，零外部依赖。
 
@@ -51,12 +51,12 @@ AstrBot 轻量记忆插件。AI 有自己的小本子、日记和翻旧账能力
 # Windows
 .venv\Scripts\activate
 pip install chromadb watchdog filelock
-git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/plugins/astrbot_plugin_simple_memory
+git clone https://github.com/bingchengcc/astrbot_plugin_lite_memory.git data/plugins/astrbot_plugin_lite_memory
 
 # Linux
 source .venv/bin/activate
 pip install chromadb watchdog filelock
-git clone https://github.com/bingchengcc/astrbot_plugin_simple_memory.git data/plugins/astrbot_plugin_simple_memory
+git clone https://github.com/bingchengcc/astrbot_plugin_lite_memory.git data/plugins/astrbot_plugin_lite_memory
 ```
 
 重启 AstrBot。

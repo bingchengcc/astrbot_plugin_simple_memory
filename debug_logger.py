@@ -7,7 +7,7 @@ def _dbg(msg: str, tag: str = "") -> None:
     try:
         prefix = f"[{tag}] " if tag else ""
         with open(
-            StarTools.get_data_dir("astrbot_plugin_simple_memory")
+            StarTools.get_data_dir("astrbot_plugin_lite_memory")
             / "debug.log",
             "a",
             encoding="utf-8",

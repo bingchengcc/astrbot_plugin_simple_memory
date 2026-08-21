@@ -263,7 +263,7 @@ class SimpleMemory(Star):
     @staticmethod
     def info() -> dict[str, Any]:
         return {
-            "name": "astrbot_plugin_simple_memory",
+            "name": "astrbot_plugin_lite_memory",
             "author": "冰城cc",
             "description": "三层记忆：向量检索 + system prompt 注入 + 每日日记 + 共同小本子",
             "version": "0.4.1",
