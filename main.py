@@ -1402,7 +1402,7 @@ class SimpleMemory(Star):
         """手动触发一次日记总结"""
         _dbg(f"mem digest hit sender={event.get_sender_id()!r}")
         if not self.digest_worker:
-            yield event.plain_result("digest worker 未启动（检查 digest_enabled）")
+            yield event.plain_result("digest worker 未初始化（检查插件日志）")
             return
         yield event.plain_result("开始手动总结...")
         await self.digest_worker.digest()
